@@ -12,9 +12,16 @@ if ! command -v javac >/dev/null 2>&1; then
   exit 1
 fi
 
-# 输出到已被 .gitignore 忽略的构建目录，避免污染仓库，也避免跨平台临时目录清理差异。
+# 用 bash 自身的 globstar 收集源文件，不依赖外部 find / xargs：
+# Windows 的 PATH 里 find.exe 是文本搜索工具，会让 `find -print0 | xargs` 直接失败。
+shopt -s globstar nullglob
+sources=("$CORE_DIR"/**/*.java)
+if (( ${#sources[@]} == 0 )); then
+  echo "no Java sources found under $CORE_DIR" >&2
+  exit 1
+fi
 mkdir -p "$OUT_DIR"
-find "$CORE_DIR" -name '*.java' -print0 | xargs -0 javac --release 21 -encoding UTF-8 -d "$OUT_DIR"
+javac --release 21 -encoding UTF-8 -d "$OUT_DIR" "${sources[@]}"
 
 java -cp "$OUT_DIR" com.scenemind.core.eval.SceneMindBenchmark \
   --out "$ROOT/docs/benchmark-report.md"

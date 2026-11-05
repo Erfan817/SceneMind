@@ -116,6 +116,50 @@ class HybridRankerTest {
     }
 
     @Test
+    void channelIsolationKeepsSingleChannelCandidatesFromBorrowingOtherRanks() {
+        List<Candidate> candidates = List.of(
+                new Candidate("asr-only", 0, 60_000L, 0.9, 0.8, 0.0,
+                        "只有语音", List.of(RetrievalChannel.SEMANTIC, RetrievalChannel.LEXICAL)),
+                new Candidate("full", 300_000L, 360_000L, 0.8, 0.8, 0.9,
+                        "语音与画面", List.of(RetrievalChannel.SEMANTIC,
+                                RetrievalChannel.LEXICAL, RetrievalChannel.VISUAL)));
+        List<RankedItem> fused = ranker.fuse(channels(candidates)).items();
+        Map<String, RankedItem> byId = new java.util.LinkedHashMap<>();
+        fused.forEach(item -> byId.put(item.candidate().id(), item));
+
+        assertEquals(2, byId.get("asr-only").matchedChannels().size(),
+                "没有 OCR 的片段不能从视觉通道借名次");
+        assertFalse(byId.get("asr-only").channelRanks().containsKey(RetrievalChannel.VISUAL));
+        assertEquals(3, byId.get("full").matchedChannels().size());
+    }
+
+    @Test
+    void weakSingleChannelEvidenceCanTriggerTopKExpansion() {
+        // 纯 ASR 视频：所有候选都只有语义通道，没有词法命中与视觉证据。
+        // 修复前每个候选恒为 3 通道，TopKPolicy 的 EXPAND 分支线上永远不可达。
+        List<Candidate> candidates = new ArrayList<>();
+        for (int i = 0; i < 9; i++) {
+            candidates.add(new Candidate("c" + i, i * 300_000L, i * 300_000L + 60_000L,
+                    0.9 - i * 0.05, 0.4, 0.0, "语音片段 " + i,
+                    List.of(RetrievalChannel.SEMANTIC)));
+        }
+        List<RankedItem> fused = ranker.fuse(channels(candidates)).items();
+        assertEquals(1, fused.get(0).matchedChannels().size());
+        TopKPolicy.Decision decision = new TopKPolicy().decide(fused, 5);
+        assertEquals(TopKPolicy.Action.EXPAND, decision.action(),
+                "头部证据偏弱时应能扩召回");
+    }
+
+    @Test
+    void unannotatedLegacyCandidatesKeepTheOldBehavior() {
+        List<Candidate> legacy = List.of(
+                new Candidate("legacy", 0, 60_000L, 0.9, 0.8, 0.7, "旧数据", List.of()));
+        List<RankedItem> fused = ranker.fuse(channels(legacy)).items();
+        assertEquals(3, fused.get(0).matchedChannels().size(),
+                "未标注通道的历史数据不应被过滤掉");
+    }
+
+    @Test
     void invalidConfigIsRejected() {
         assertThrows(IllegalArgumentException.class,
                 () -> new RankingConfig(0, Map.of(), 300_000L, 0.8, 8));

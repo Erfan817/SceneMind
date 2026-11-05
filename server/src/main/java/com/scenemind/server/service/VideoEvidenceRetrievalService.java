@@ -107,8 +107,12 @@ public class VideoEvidenceRetrievalService {
         }
 
         // 2. 三通道独立召回 -> RRF 融合 -> 自适应预算 -> 覆盖选择。
+        // 每个通道只接收确实拥有该通道证据的候选：没有 OCR 的片段不能从视觉通道借名次，
+        // 否则 matchedChannels 恒为 3，TopKPolicy 的弱证据扩召回永远不可达。
         List<ChannelRanking> channels = Arrays.stream(RetrievalChannel.values())
-                .map(channel -> new ChannelRanking(channel, candidates))
+                .map(channel -> new ChannelRanking(channel, candidates.stream()
+                        .filter(candidate -> candidate.channelsPresent().contains(channel))
+                        .toList()))
                 .toList();
         HybridRanker.Fusion fusion = hybridRanker.fuse(channels);
         TopKPolicy.Decision decision = topKPolicy.decide(
@@ -122,6 +126,8 @@ public class VideoEvidenceRetrievalService {
         telemetry.incrementCurrent("retrievalDuplicatesSuppressed",
                 ranked.diagnostics().duplicatesSuppressed());
         telemetry.valueCurrent("retrievalDynamicTopK", decision.topK());
+        // 逐条可解释诊断落到 trace，供 /analysis/agent-trace 与前端调试面板消费。
+        telemetry.sectionCurrent("retrieval", retrievalDiagnostics(ranked, decision));
         if (log.isDebugEnabled()) {
             log.debug("retrieval decision: {} | {}", decision.reason(), ranked.diagnostics().notes());
         }
@@ -143,7 +149,37 @@ public class VideoEvidenceRetrievalService {
         } catch (RuntimeException e) {
             // 向量库挂了仍可走内存向量和关键词，别让检索基础设施拖垮分析主链路。
             telemetry.incrementCurrent("vectorStoreFallbacks", 1);
+            log.warn("vector_index_failed mediaId={} chunks={}", mediaId, chunks.size(), e);
         }
+    }
+
+    /** 把 RankingResult 的逐条依据转换成可 JSON 化的诊断对象。 */
+    private Map<String, Object> retrievalDiagnostics(RankingResult ranked,
+                                                      TopKPolicy.Decision decision) {
+        Map<String, Object> diagnostics = new LinkedHashMap<>();
+        diagnostics.put("topK", hybridRanker.config().maxResults());
+        diagnostics.put("dynamicTopK", decision.topK());
+        diagnostics.put("action", decision.action().name());
+        diagnostics.put("reason", decision.reason());
+        diagnostics.put("candidatesSeen", ranked.diagnostics().candidatesSeen());
+        diagnostics.put("duplicatesSuppressed", ranked.diagnostics().duplicatesSuppressed());
+        diagnostics.put("windowsCovered", ranked.diagnostics().windowsCovered());
+        diagnostics.put("secondPassFills", ranked.diagnostics().secondPassFills());
+        diagnostics.put("channelsUsed", ranked.diagnostics().channelsUsed().stream()
+                .map(Enum::name).toList());
+        diagnostics.put("notes", ranked.diagnostics().notes());
+        diagnostics.put("items", ranked.items().stream().map(item -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", item.candidate().id());
+            row.put("fusedScore", item.fusedScore());
+            row.put("selectionPass", item.selectionPass());
+            Map<String, Integer> ranks = new LinkedHashMap<>();
+            item.channelRanks().forEach((channel, rank) -> ranks.put(channel.name(), rank));
+            row.put("channelRanks", ranks);
+            row.put("matchedChannels", item.matchedChannels().stream().map(Enum::name).toList());
+            return row;
+        }).toList());
+        return diagnostics;
     }
 
     private double semanticScore(VideoRetrievalIntent intent,

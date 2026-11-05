@@ -19,6 +19,9 @@ import java.util.Set;
  *   <li><b>RRF 融合</b>：每个通道独立产出有序列表，最终得分只由「名次」决定
  *       {@code score(d) = Σ w_c / (k + rank_c(d))}。这样不同通道的分数无需归一化，
  *       远程向量库分数与本地 cosine 也不会互相污染。</li>
+ *   <li><b>通道隔离</b>：一条候选只有在 {@code channelsPresent} 里声明了某通道，
+ *       才会在该通道里参与排名，避免「没有 OCR 的片段照样拿视觉通道名次」，
+ *       也让 {@link TopKPolicy} 的弱证据扩召回真正可达。</li>
  *   <li><b>时间窗覆盖</b>：第一轮每个时间窗只取最优的一条，避免数小时视频的
  *       TopK 全部挤在同一段；不足名额时第二轮再按融合分补满。</li>
  *   <li><b>近重复抑制</b>：时间相邻且文本 bigram 相似度超阈值的片段只保留高分者。</li>
@@ -81,7 +84,21 @@ public final class HybridRanker {
                 continue;
             }
 
+            // 通道隔离：一条候选只有确实拥有该通道的证据，才能在该通道里参与排名。
+            // 适配层曾把同一份全量候选交给三个 ChannelRanking，结果每条候选的
+            // matchedChannels() 恒为 3：没有 OCR 的片段照样拿视觉通道名次，
+            // TopKPolicy 的「仅命中单一通道 -> 扩召回」分支也永远不可达。
+            // channelsPresent 全部为空视为「未标注的旧数据」，保持原行为以兼容历史调用方。
+            boolean anyAnnotated = channelRanking.ordered().stream()
+                    .anyMatch(candidate -> !candidate.channelsPresent().isEmpty());
             List<Candidate> ordered = new ArrayList<>(channelRanking.ordered());
+            if (anyAnnotated) {
+                ordered.removeIf(candidate -> !candidate.channelsPresent().contains(channel));
+            }
+            if (ordered.isEmpty()) {
+                notes.add("通道 " + channel.displayName() + " 过滤后无可用候选，未参与融合");
+                continue;
+            }
             ordered.sort(Comparator.comparingDouble((Candidate c) -> c.scoreOf(channel)).reversed()
                     .thenComparing(Candidate::startMs)
                     .thenComparing(Candidate::id));

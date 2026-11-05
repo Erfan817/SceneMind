@@ -2,10 +2,11 @@
 
 > 本报告由 `com.scenemind.core.eval.SceneMindBenchmark` 自动生成，运行不依赖 Spring / 数据库 / 向量库 / LLM。
 > 数据集为**可复现的合成数据集**（2 小时课程视频 / 跨时段证据检索），用于策略回归，非线上真实流量。
+> 评测参数来自与线上同名的 `SCENEMIND_*` 环境变量，链路与在线一致（fuse -> TopKPolicy.decide -> select）。
 
 ## 1. 检索策略 A/B
 
-- 候选片段：28 个；标注相关片段：4 个；TopK = 8；时间窗 = 300000 ms
+- 候选片段：28 个；标注相关片段：4 个；请求 TopK = 8；实际预算 = 8；时间窗 = 300000 ms
 - 基线：三通道原始分线性加权（0.6 / 0.25 / 0.15）
 - 改造：RRF 多通道融合 + 时间窗覆盖 + 近重复抑制
 
@@ -38,9 +39,18 @@
 
 ## 3. 自适应召回预算
 
+- 本次 A/B 链路决策：`KEEP`（TopK=8），理由：证据分布正常，维持固定预算
 - 弱证据样例决策：`EXPAND`（TopK=7），理由：头部仅命中 1 个通道，证据偏弱，预算 5 -> 7
 
-## 4. 自检断言
+## 4. 生效策略配置
+
+> 本节由环境变量实时生成。修改 `SCENEMIND_*` 后重跑评测，本节与指标都会变化，CI 的 `git diff --exit-code` 会要求同步提交报告，因此配置变更同样受门禁约束。
+
+- `SCENEMIND_RRF_K=60`，`SCENEMIND_WINDOW_MS=300000`，`SCENEMIND_REDUNDANCY_SIMILARITY=0.82`，`SCENEMIND_MAX_RESULTS=8`
+- 通道权重：语义 1.00 / 词法 1.00 / 视觉 0.80
+- TopKPolicy：`SCENEMIND_MIN_K` / `SCENEMIND_MAX_K` / `SCENEMIND_MIN_CHANNELS`（默认 3 / 12 / 2），平台阈值 0.08 / 0.50 与线上 `RankingConfiguration` 一致
+
+## 5. 自检断言
 
 - PASS 融合检索 Recall@K 不低于基线
 - PASS 融合检索时间覆盖率不低于基线
@@ -50,11 +60,14 @@
 - PASS 证据校验黄金用例全部通过
 - PASS 音画冲突被显式识别
 - PASS 弱证据场景触发自适应扩召回
+- PASS 融合检索 Recall@K 绝对值不低于 0.75
+- PASS 融合检索时间覆盖率绝对值不低于 0.75
+- PASS 融合检索冗余率绝对值不高于 0.20
 
 ---
 
 复现命令：
 
 ```bash
-./scripts/run-benchmark.sh
+bash scripts/run-benchmark.sh
 ```

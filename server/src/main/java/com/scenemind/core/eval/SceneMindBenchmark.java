@@ -9,6 +9,7 @@ import com.scenemind.core.evidence.EvidenceModels.EvidenceSegment;
 import com.scenemind.core.evidence.RejectionReason;
 import com.scenemind.core.ranking.Candidate;
 import com.scenemind.core.ranking.RankedItem;
+import com.scenemind.core.ranking.RankingConfig;
 import com.scenemind.core.ranking.RetrievalChannel;
 import com.scenemind.core.ranking.TopKPolicy;
 
@@ -17,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -38,9 +40,11 @@ public final class SceneMindBenchmark {
     }
 
     public static void main(String[] args) throws IOException {
-        OfflineEvaluator.Report report = OfflineEvaluator.evaluate();
+        RankingConfig config = configFromEnvironment();
+        TopKPolicy policy = policyFromEnvironment();
+        OfflineEvaluator.Report report = OfflineEvaluator.evaluate(config, policy);
         List<CheckResult> evidenceChecks = evidenceRegression();
-        TopKPolicy.Decision topKDecision = topKExample();
+        TopKPolicy.Decision topKDecision = topKExample(policy);
 
         List<String> assertions = new ArrayList<>();
         check(assertions, report.hybrid().recallAtK() >= report.baseline().recallAtK(),
@@ -59,6 +63,14 @@ public final class SceneMindBenchmark {
                 "音画冲突被显式识别");
         check(assertions, topKDecision.action() == TopKPolicy.Action.EXPAND,
                 "弱证据场景触发自适应扩召回");
+        // 绝对阈值：相对断言（hybrid >= baseline）挡不住「两边一起变差」，
+        // 补三条绝对下限，避免开发者重新生成报告后把劣化一起提交进去。
+        check(assertions, report.hybrid().recallAtK() >= 0.75,
+                "融合检索 Recall@K 绝对值不低于 0.75");
+        check(assertions, report.hybrid().temporalCoverage() >= 0.75,
+                "融合检索时间覆盖率绝对值不低于 0.75");
+        check(assertions, report.hybrid().redundancyRate() <= 0.20,
+                "融合检索冗余率绝对值不高于 0.20");
 
         String markdown = render(report, evidenceChecks, topKDecision, assertions);
         System.out.println(markdown);
@@ -137,7 +149,50 @@ public final class SceneMindBenchmark {
         return new ConflictDetector().detect(conflict).hasConflict();
     }
 
-    private static TopKPolicy.Decision topKExample() {
+    /**
+     * 从与 Spring 同名的 {@code SCENEMIND_*} 环境变量构造评测参数。
+     * 改这些变量会同时改变线上排序与本报告，CI 的报告 diff 门禁才覆盖配置变更；
+     * 解析失败直接抛错，避免「配错了却静默用默认值」把门禁骗过去。
+     */
+    private static RankingConfig configFromEnvironment() {
+        EnumMap<RetrievalChannel, Double> weights = new EnumMap<>(RetrievalChannel.class);
+        weights.put(RetrievalChannel.SEMANTIC, doubleEnv("SCENEMIND_W_SEMANTIC", 1.0));
+        weights.put(RetrievalChannel.LEXICAL, doubleEnv("SCENEMIND_W_LEXICAL", 1.0));
+        weights.put(RetrievalChannel.VISUAL, doubleEnv("SCENEMIND_W_VISUAL", 0.8));
+        return new RankingConfig(
+                intEnv("SCENEMIND_RRF_K", 60),
+                weights,
+                longEnv("SCENEMIND_WINDOW_MS", 300_000L),
+                doubleEnv("SCENEMIND_REDUNDANCY_SIMILARITY", 0.82),
+                intEnv("SCENEMIND_MAX_RESULTS", 8));
+    }
+
+    private static TopKPolicy policyFromEnvironment() {
+        return new TopKPolicy(
+                intEnv("SCENEMIND_MIN_K", 3),
+                intEnv("SCENEMIND_MAX_K", 12),
+                intEnv("SCENEMIND_MIN_CHANNELS", 2),
+                0.08, 0.5);
+    }
+
+    private static String env(String key, String fallback) {
+        String value = System.getenv(key);
+        return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    private static int intEnv(String key, int fallback) {
+        return Integer.parseInt(env(key, Integer.toString(fallback)));
+    }
+
+    private static long longEnv(String key, long fallback) {
+        return Long.parseLong(env(key, Long.toString(fallback)));
+    }
+
+    private static double doubleEnv(String key, double fallback) {
+        return Double.parseDouble(env(key, Double.toString(fallback)));
+    }
+
+    private static TopKPolicy.Decision topKExample(TopKPolicy policy) {
         RankedItem weak = new RankedItem(
                 new Candidate("weak", 0, 60_000, 0.3, 0.0, 0.0, "",
                         List.of(RetrievalChannel.SEMANTIC)),
@@ -152,7 +207,7 @@ public final class SceneMindBenchmark {
                     0.016 - i * 0.001, Map.of(RetrievalChannel.SEMANTIC, i + 1),
                     List.of(RetrievalChannel.SEMANTIC), 0));
         }
-        return new TopKPolicy().decide(fused, 5);
+        return policy.decide(fused, 5);
     }
 
     private static EvidenceCorpus corpus(EvidenceSegment... segments) {
@@ -179,13 +234,16 @@ public final class SceneMindBenchmark {
         sb.append("> 本报告由 `com.scenemind.core.eval.SceneMindBenchmark` 自动生成，")
                 .append("运行不依赖 Spring / 数据库 / 向量库 / LLM。\n")
                 .append("> 数据集为**可复现的合成数据集**（")
-                .append(report.dataset()).append("），用于策略回归，非线上真实流量。\n\n");
+                .append(report.dataset()).append("），用于策略回归，非线上真实流量。\n")
+                .append("> 评测参数来自与线上同名的 `SCENEMIND_*` 环境变量，")
+                .append("链路与在线一致（fuse -> TopKPolicy.decide -> select）。\n\n");
 
         sb.append("## 1. 检索策略 A/B\n\n");
         sb.append(String.format(Locale.ROOT,
-                "- 候选片段：%d 个；标注相关片段：%d 个；TopK = %d；时间窗 = %d ms\n",
+                "- 候选片段：%d 个；标注相关片段：%d 个；请求 TopK = %d；实际预算 = %d；时间窗 = %d ms\n",
                 report.candidateCount(), report.relevantCount(),
-                BenchmarkFixtures.TOP_K, BenchmarkFixtures.WINDOW_MS));
+                report.config().maxResults(), report.decision().topK(),
+                report.config().windowMs()));
         sb.append("- 基线：三通道原始分线性加权（0.6 / 0.25 / 0.15）\n");
         sb.append("- 改造：RRF 多通道融合 + 时间窗覆盖 + 近重复抑制\n\n");
         sb.append("| 策略 | Recall@K ↑ | 时间覆盖率 ↑ | 冗余率 ↓ | 量纲稳定性 ↑ |\n");
@@ -218,13 +276,32 @@ public final class SceneMindBenchmark {
 
         sb.append("## 3. 自适应召回预算\n\n");
         sb.append(String.format(Locale.ROOT,
+                "- 本次 A/B 链路决策：`%s`（TopK=%d），理由：%s\n",
+                report.decision().action(), report.decision().topK(), report.decision().reason()));
+        sb.append(String.format(Locale.ROOT,
                 "- 弱证据样例决策：`%s`（TopK=%d），理由：%s\n\n",
                 decision.action(), decision.topK(), decision.reason()));
 
-        sb.append("## 4. 自检断言\n\n");
+        sb.append("## 4. 生效策略配置\n\n");
+        sb.append("> 本节由环境变量实时生成。修改 `SCENEMIND_*` 后重跑评测，本节与指标都会变化，")
+                .append("CI 的 `git diff --exit-code` 会要求同步提交报告，因此配置变更同样受门禁约束。\n\n");
+        sb.append(String.format(Locale.ROOT,
+                "- `SCENEMIND_RRF_K=%d`，`SCENEMIND_WINDOW_MS=%d`，"
+                        + "`SCENEMIND_REDUNDANCY_SIMILARITY=%.2f`，`SCENEMIND_MAX_RESULTS=%d`\n",
+                report.config().rrfK(), report.config().windowMs(),
+                report.config().redundancySimilarity(), report.config().maxResults()));
+        sb.append(String.format(Locale.ROOT,
+                "- 通道权重：语义 %.2f / 词法 %.2f / 视觉 %.2f\n",
+                report.config().weightOf(RetrievalChannel.SEMANTIC),
+                report.config().weightOf(RetrievalChannel.LEXICAL),
+                report.config().weightOf(RetrievalChannel.VISUAL)));
+        sb.append("- TopKPolicy：`SCENEMIND_MIN_K` / `SCENEMIND_MAX_K` / `SCENEMIND_MIN_CHANNELS`")
+                .append("（默认 3 / 12 / 2），平台阈值 0.08 / 0.50 与线上 `RankingConfiguration` 一致\n\n");
+
+        sb.append("## 5. 自检断言\n\n");
         assertions.forEach(line -> sb.append("- ").append(line).append('\n'));
         sb.append("\n---\n\n复现命令：\n\n```bash\n")
-                .append("./scripts/run-benchmark.sh\n```\n");
+                .append("bash scripts/run-benchmark.sh\n```\n");
         return sb.toString();
     }
 }
