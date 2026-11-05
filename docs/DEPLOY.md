@@ -1,6 +1,8 @@
 # 部署到云服务器
 
 > 目标：把 SceneMind 从「本地跑」变成「公网可访问的实例」。单机 Docker Compose，前后端同源，Caddy 自动 HTTPS。
+>
+> 如果服务器在国内且无法访问 Docker Hub / GitHub / Let's Encrypt（小带宽 VPS 常见），用裸机方案：[`DEPLOY_BARE.md`](DEPLOY_BARE.md)。
 
 ## 0. 服务器要求
 

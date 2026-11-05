@@ -59,6 +59,7 @@ public class UserController {
         return switch (code) {
             case 400 -> ErrorCode.INVALID_ARGUMENT;
             case 401 -> ErrorCode.UNAUTHORIZED;
+            case 403 -> ErrorCode.FORBIDDEN;
             case 409 -> ErrorCode.CONFLICT;
             case 429 -> ErrorCode.RATE_LIMITED;
             default -> ErrorCode.INTERNAL_ERROR;
