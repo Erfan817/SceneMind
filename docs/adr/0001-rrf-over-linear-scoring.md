@@ -63,8 +63,22 @@ score = 0.6 * semantic + 0.25 * lexical + 0.15 * visual
 - **本合成数据集上 Recall@8 与时间覆盖率持平（1.000）**：改造证明的是冗余与鲁棒性收益，
   不是召回上限。验证召回收益需要真实标注集（路线图第一项）。
 
+## 后续修正：通道隔离
+
+RRF 实现上线后发现一个语义漏洞：融合时每个通道都拿到同一份**全量候选**，于是「没有 OCR 证据的片段」照样能在视觉通道拿到名次。
+
+- 后果一：`matchedChannels` 恒为 3，「所有证据都很弱」这个信号失真；
+- 后果二：`TopKPolicy` 的「仅命中单一通道 → 扩召回」分支永远不可达，弱证据扩召回实际上从未生效。
+
+修复要同时改两层：
+
+1. 内核 `HybridRanker.fuse()`：按 `channelsPresent` 过滤，只有声明了该通道的候选才参与该通道排名；`channelsPresent` 全为空视为「未标注的旧数据」，保持原行为以兼容历史调用方；
+2. 适配层 `VideoEvidenceRetrievalService`：构造三个 `ChannelRanking` 时按通道过滤，不再把同一份候选交给三个通道。
+
+`HybridRankerTest` 增加了通道隔离用例；离线评测走同一条 `fuse → TopKPolicy.decide → select` 链路，所以报告能反映这次修复。
+
 ## 验证
 
-- `HybridRankerTest`：单调缩放不变性、去冗余、跨时间窗覆盖、零权重通道、外部预算、非法配置。
+- `HybridRankerTest`：单调缩放不变性、通道隔离、去冗余、跨时间窗覆盖、零权重通道、外部预算、非法配置。
 - `OfflineEvaluatorTest`：RRF 稳定性恒为 1.0、线性加权 < 1.0、四项指标不退化、评测完全确定。
-- `scripts/run-benchmark.sh` → `docs/benchmark-report.md`，8 条自检断言，CI 做报告 diff 门禁。
+- `bash scripts/run-benchmark.sh` → `docs/benchmark-report.md`，11 条自检断言，CI 做报告 diff 门禁。

@@ -13,7 +13,8 @@ done
 
 if [[ ! -f .env ]]; then
   cp .env.example .env
-  echo "Created .env. Set SILICONFLOW_API_KEY and replace the example passwords, then run this script again."
+  echo "已创建 .env。" >&2
+  echo "请先编辑 .env，填入真实 SILICONFLOW_API_KEY，并把 change-* 示例口令替换掉，然后重跑本脚本。" >&2
   exit 1
 fi
 
@@ -22,14 +23,20 @@ set -a
 source .env
 set +a
 
+missing=()
 for variable in \
   DB_PASSWORD MYSQL_ROOT_PASSWORD REDIS_PASSWORD MINIO_SECRET_KEY QDRANT_API_KEY SILICONFLOW_API_KEY; do
   value="${!variable:-}"
   if [[ -z "$value" || "$value" == change-* ]]; then
-    echo "Set a non-example value for $variable in .env" >&2
-    exit 1
+    missing+=("$variable")
   fi
 done
+if (( ${#missing[@]} > 0 )); then
+  echo "请先编辑 .env，填入真实值后再重跑本脚本。以下变量仍是空值或示例值：" >&2
+  printf '  - %s\n' "${missing[@]}" >&2
+  echo "提示：SILICONFLOW_API_KEY 必须是真实可用的 Key；其余口令把 change-* 示例值替换掉即可。" >&2
+  exit 1
+fi
 
 if [[ ! -d mysql/data/mysql && "${DB_USERNAME:-}" != "${MYSQL_APP_USER:-dovideo}" ]]; then
   echo "DB_USERNAME and MYSQL_APP_USER must match for a fresh database." >&2

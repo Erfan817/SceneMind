@@ -15,4 +15,10 @@ minio/data/
 
 # 本地工作区记忆与工具数据，不进入公开仓库
 .workbuddy/
+
+# 简历与面试准备材料只在本地保留，不进入公开仓库
+docs/private/
+
+# 真实标注集数据（可能含版权受限内容）只在本地使用；示例文件可提交
+server/src/main/resources/evaluation/real-annotations.json
  

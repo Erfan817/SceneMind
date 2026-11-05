@@ -36,13 +36,16 @@
    目录并运行评测，完全不经过 Maven、Spring、Docker 或 LLM；随后 `git diff --exit-code`
    校验生成的报告与提交版本一致。隔离被破坏（例如 core 里 import 了 Spring）会直接编译失败。
 6. Spring 适配层保持三个原有 public 方法签名与语义不变，既有回归测试零修改通过。
+7. 旧的 `OfflineAgentEvaluationRunner` **不删除**：它是启动时跑真实 LLM 的在线评估入口，由
+   `@ConditionalOnProperty("agent.evaluation.enabled")` 默认关闭（`AGENT_EVALUATION_ENABLED=false`），
+   不参与 CI。新增的确定性路径与它并存，避免一次性改动影响既有评估逻辑。
 
 ## 后果
 
 **正面**
 
-- 新增 26 个单元测试，后端 20 个测试类全绿；原有 14 个测试类零修改通过。
-- 评测从「需要 API Key 的手工脚本」变成「一个 JDK 就能跑、8 条断言、CI 门禁」。
+- 新增 10 个测试类，后端 24 个测试类 / 74 个用例全绿；原有 14 个测试类零修改通过。
+- 评测从「需要 API Key 的手工脚本」变成「一个 JDK 就能跑、11 条断言、CI 门禁」；评测参数读与线上同名的 `SCENEMIND_*` 环境变量，报告会列出「生效策略配置」。
 - 策略可解释、可回放、可 A/B，调参不改代码。
 
 **负面 / 已知取舍**
@@ -55,6 +58,6 @@
 ## 验证
 
 - `javac --release 21 -d out $(find core -name '*.java')` 退出码 0。
-- `bash scripts/run-benchmark.sh` 8 条自检断言全部通过。
-- `cd server && ./mvnw test`：20 个测试类 / 0 失败。
+- `bash scripts/run-benchmark.sh` 11 条自检断言全部通过。
+- `cd server && bash ./mvnw test`：24 个测试类 / 74 个用例 / 0 失败。
 - `.github/workflows/ci.yml` 的 `core-evaluation` job 作为长期门禁。

@@ -22,7 +22,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ 接入层   Vue 3 工作台 / 浏览器扩展 / SSE 实时阶段推送           │
+│ 接入层   Vue 3 工作台 / 浏览器扩展 / MCP Server / SSE 阶段推送   │
 ├─────────────────────────────────────────────────────────────┤
 │ 编排层   Spring Boot API：鉴权、分片上传、任务投递、状态查询      │
 │          RocketMQ 消费者 → 幂等检查 → Checkpoint 恢复            │
@@ -30,11 +30,12 @@
 │ 上下文层 VideoContext：ASR / OCR / 关键帧 / 时间戳 → VideoChunk  │
 ├─────────────────────────────────────────────────────────────┤
 │ 策略层 ★ com.scenemind.core（纯函数，零框架依赖）                │
-│   ranking   RRF 融合 / 时间窗覆盖 / 去冗余 / 自适应预算           │
+│   ranking   RRF 融合 / 通道隔离 / 时间窗覆盖 / 去冗余 / 自适应预算 │
 │   evidence  通道隔离校验 / 拒绝原因 / 音画冲突                    │
 │   eval      确定性离线评测 / 指标 / 自检断言                      │
 ├─────────────────────────────────────────────────────────────┤
 │ Agent 层  Planner → Executor → Critic（最多两轮）→ 结构化产物     │
+│           证据重试分流 EvidenceRetryPolicy（纯函数）              │
 ├─────────────────────────────────────────────────────────────┤
 │ 存储层   MySQL（Checkpoint 真源）/ Redis（热缓存）/ MinIO / Qdrant│
 └─────────────────────────────────────────────────────────────┘
@@ -50,8 +51,8 @@
 4. FFmpeg 切分音频、场景变化检测抽关键帧（30 秒保底采样），感知哈希去掉重复画面，生成 `VideoContext`。
 5. 每 5 分钟生成摘要 / 关键词 / Embedding，检索层召回相关原始片段。
 6. `HybridRanker` 对语义、词法、视觉三条通道做 RRF 融合，按时间窗覆盖并抑制近重复，`TopKPolicy` 动态决定预算。
-7. AgentLoop 生成结构化结论、证据与建议；`EvidenceAuditor` 校验每条证据的来源、时间戳与原文；Critic 不通过则按拒绝原因定向补检索。
-8. 结果与 Checkpoint 落库，SSE 推送阶段与最终结果；支持基于同一视频继续追问，多轮上下文存 Redis。
+7. AgentLoop 生成结构化结论、证据与建议；`EvidenceVerificationService.auditResult()` 逐条核验来源、时间戳与原文，并汇总音画冲突；Critic 按拒绝原因分流：可修的证据缺口按时间戳定向补检索，伪造来源 / 跨通道拼接直接判幻觉、只重写不补检索。
+8. 结果与 Checkpoint 落库，SSE 推送阶段与最终结果；`TaskStatus` 带结构化 `conflicts`，结果 markdown 顶部有音画冲突警示条，重新打开面板时同样带；检索、证据与重试诊断写入 trace，供 `/analysis/agent-trace` 与前端调试面板读取。支持基于同一视频继续追问，多轮上下文存 Redis。
 
 ## 5. 功能边界
 
@@ -71,21 +72,31 @@
 
 | 手段 | 内容 |
 | --- | --- |
-| 单元测试 | `server` 20 个测试类 / 0 失败；本次新增 26 个用例覆盖 RRF 不变性、去冗余、时间窗覆盖、拒绝原因、冲突检测、评测确定性 |
-| 确定性离线评测 | `scripts/run-benchmark.sh`，零外部依赖，8 条内置断言，失败非零退出 |
+| 单元测试 | `server` 24 个测试类 / 74 个 `@Test` 用例（`bash ./mvnw test` 实测 0 失败）；`core` 纯函数层 5 个测试类 29 个用例，覆盖 RRF 不变性、通道隔离、去冗余、时间窗覆盖、拒绝原因、冲突检测、重试分流、评测确定性 |
+| 确定性离线评测 | `bash scripts/run-benchmark.sh`，零外部依赖，11 条内置断言（8 条相对基线 + 3 条绝对阈值），失败非零退出 |
 | CI 门禁 | `core-evaluation` job 重新生成报告并要求与提交版本字节一致；`backend` / `frontend` / `extension` 三路并行测试与构建 |
 | 回归兼容 | 证据校验原有 3 个 public 方法语义不变，原有 4 个回归测试零修改通过 |
-| 降级与可观测 | 向量库 / Embedding / 意图路由故障均有兜底；检索输出可解释诊断并写入埋点 |
+| 端到端冒烟 | `bash scripts/smoke-test.sh`：健康检查 → 登录 → 提交 URL 分析 → 轮询状态 → 断言结果含 `[mm:ss]` 证据；缺少 Key / 账号时明确跳过，本地用、不进 CI |
+| 降级与可观测 | 向量库 / Embedding / 意图路由故障均有兜底；检索、证据核验与重试决策作为结构化诊断写入 trace，前端「分析详情」可见 |
 
 ## 7. 当前状态与验证方式
 
-- 已验证：后端全量编译与单测（JDK 21）、core 纯 JDK 编译与评测自检、前端与扩展既有测试、CI 配置语法。
-- 需要环境才能端到端验证：Docker Compose 中间件、FFmpeg / Tesseract、`SILICONFLOW_API_KEY`。
+- 已验证：后端全量编译与单测（JDK 21，24 个测试类 74 个用例、0 失败）、`core` 纯 JDK 编译与评测自检（11 条断言）、前端既有用例、CI 配置语法。
+- 需要环境才能端到端验证：Docker Compose 中间件、FFmpeg / Tesseract、`SILICONFLOW_API_KEY`。`bash scripts/smoke-test.sh` 是这条路径的自动化版本。
+- 已知限制：调试面板展示的是单次分析的诊断快照，还不是可回放的时间轴；MCP Server 目前只支持 stdio 传输。
 - 评测数据声明：`docs/benchmark-report.md` 为**合成压力数据集**上的确定性结果，用于策略回归，不代表线上效果。
 
 ## 8. 后续规划
 
+本轮已完成：
+
+- `retryable` 拒绝原因接进 AgentLoop，按原因选择重试策略（`EvidenceRetryPolicy` 纯函数 + 单测）；
+- 检索诊断落到前端调试面板（`diagnostics.retrieval` / `diagnostics.evidence` / `diagnostics.retry`）；
+- 音画冲突显式标注：结构化 `conflicts` 字段、结果 markdown 警示条、前端冲突提示。
+
+尚未完成：
+
 1. 接入真实标注视频集，验证召回收益（当前只证明了鲁棒性与冗余改善）；
 2. 用评测报告驱动 RRF 的 `k` 与通道权重自动寻优；
-3. 把 `retryable` 拒绝原因接进 AgentLoop，实现「按原因选重试策略」而非无差别重跑；
-4. 检索诊断落到前端调试面板，支持单次任务的完整 trace 回放。
+3. 单次任务的完整 trace 时间轴回放（诊断已进前端，回放还没有）；
+4. MCP Server 远程部署（Streamable HTTP + 鉴权）。
