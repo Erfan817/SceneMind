@@ -14,6 +14,7 @@ import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -208,14 +209,29 @@ public class VideoContextService {
                                              List<String> uploadedEvidenceFrames) throws Exception {
         Files.createDirectories(frameDir);
         List<Long> timestamps = new ArrayList<>();
-        runCommand(List.of(
-                "ffmpeg", "-y", "-i", videoPath,
-                "-vf", "select=eq(n\\,0)+gt(scene\\,0.35)+gte(t-prev_selected_t\\,30),showinfo",
-                // 用 -fps_mode 而非 -vsync：后者自 ffmpeg 5.0 起弃用、8.0 起移除，
-                // 在 ffmpeg 9 上会直接报 "Unrecognized option 'vsync'" 导致抽帧失败。
-                "-fps_mode", "vfr",
-                frameDir.resolve("frame_%06d.jpg").toString()
-        ), timestamps);
+        String filter = "select=eq(n\\,0)+gt(scene\\,0.35)+gte(t-prev_selected_t\\,30),showinfo";
+        String outputPattern = frameDir.resolve("frame_%06d.jpg").toString();
+        try {
+            runCommand(List.of(
+                    "ffmpeg", "-y", "-i", videoPath,
+                    "-vf", filter,
+                    // 用 -fps_mode 而非 -vsync：后者自 ffmpeg 5.0 起弃用、8.0 起移除，
+                    // 在 ffmpeg 9 上会直接报 "Unrecognized option 'vsync'" 导致抽帧失败。
+                    "-fps_mode", "vfr",
+                    outputPattern
+            ), timestamps);
+        } catch (Exception modernFailure) {
+            // ffmpeg < 5.1 不认识 -fps_mode（Ubuntu 22.04 自带 4.4 就是这种情况），
+            // 清掉半成品后回退到旧参数；两条路径都失败才向上抛。
+            clearDirectory(frameDir);
+            timestamps.clear();
+            runCommand(List.of(
+                    "ffmpeg", "-y", "-i", videoPath,
+                    "-vf", filter,
+                    "-vsync", "vfr",
+                    outputPattern
+            ), timestamps);
+        }
 
         List<Path> frameFiles;
         try (var paths = Files.list(frameDir)) {
@@ -338,6 +354,15 @@ public class VideoContextService {
         Matcher matcher = PTS_TIME.matcher(line);
         if (matcher.find()) {
             timestamps.add((long) (Double.parseDouble(matcher.group(1)) * 1000));
+        }
+    }
+
+    private void clearDirectory(Path directory) throws IOException {
+        if (!Files.exists(directory)) return;
+        try (Stream<Path> paths = Files.list(directory)) {
+            for (Path path : paths.toList()) {
+                Files.deleteIfExists(path);
+            }
         }
     }
 
