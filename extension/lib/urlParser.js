@@ -101,6 +101,24 @@ export function isSameVideo(left, right) {
 }
 
 /**
+ * 展开 b23.tv 短链：扩展已申请 b23.tv / bilibili.com 的 host_permissions，
+ * 因此可以在侧边栏直接 fetch 并读取重定向后的最终 URL。失败返回 null，
+ * 调用方应退回原始短链（后端 yt-dlp 仍可解析，只是无法做时间戳跳转）。
+ */
+export async function resolveVideoUrl(rawUrl, { fetchImpl = globalThis.fetch } = {}) {
+  const url = toUrl(rawUrl)
+  if (!url) return null
+  if (!url.hostname.endsWith('b23.tv')) return url.href
+  try {
+    const response = await fetchImpl(url.href, { redirect: 'follow', credentials: 'omit' })
+    const finalUrl = response?.url || ''
+    return parseVideoUrl(finalUrl).ok ? finalUrl : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * 给视频地址附加起播时间。B 站与 YouTube 都用 t 参数，但 YouTube 要求带单位后缀。
  * 无法解析时返回 null，调用方应放弃跳转。
  */

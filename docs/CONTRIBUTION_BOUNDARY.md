@@ -7,7 +7,7 @@
 
 | 层次 | 内容 | 归属 |
 | --- | --- | --- |
-| 接入层 | Vue 3 工作台、浏览器扩展、SSE 阶段推送 | 沿用，未改动 |
+| 接入层 | Vue 3 工作台（沿用）、浏览器扩展（补齐本地文件上传 / 追问 / b23 展开 / 表格与嵌套列表，见 #20） | 部分沿用 + 本次扩展 |
 | 编排层 | 分片上传/断点续传、RocketMQ 削峰、幂等锁、令牌桶、重试与降级、Checkpoint、失败任务重投 | 沿用，未改动 |
 | 上下文层 | FFmpeg 音频切片、场景关键帧、ASR/OCR 并行与容错、VideoContext / VideoChunk | 沿用，未改动 |
 | Agent 层 | Planner / Executor / Critic、四类模式路由、结构化产物、两轮预算 | 沿用，未改动 |
@@ -42,6 +42,7 @@
 | 17 | 冲突进结果链路 | 冲突只存在于纯函数与埋点，用户看不到 | `TaskStatus` 带结构化 `conflicts`，结果 markdown 顶部加「音画冲突提示」警示条；SSE 完成事件与 `analysis-status` 重新打开面板都带 | 新增 | `TaskStatus` 渲染逻辑；`?demo` 可见警示条 |
 | 18 | 检索诊断前端 | 诊断只在日志与埋点里，排障要翻服务端日志 | `/analysis/agent-trace` 返回 `diagnostics.retrieval`（通道名次、抑制数、覆盖窗数、notes）与 `diagnostics.evidence`、`diagnostics.retry`，前端「分析详情」展示；`agent-evaluation` 的证据冗余率 / 时间覆盖度 / 冲突标记一并展示 | 新增 | 前端 `?demo`；`/analysis/agent-trace` 接口 |
 | 19 | RRF 通道隔离 | 三个 `ChannelRanking` 拿到同一份全量候选，`matchedChannels` 恒为 3，弱证据扩召回永不触发 | 内核与适配层都按 `channelsPresent` 过滤；空标注的旧数据保持原行为 | 修复 | `HybridRankerTest` 通道隔离用例 |
+| 20 | 浏览器扩展补全 | 骨架版：不支持本地文件上传、追问、b23 时间戳跳转、表格/嵌套列表 | 新增 5MB 分片上传 + 进度、结果追问、b23 短链展开、表格/嵌套列表渲染；扩展测试 59 个 | 新增 | `extension/tests/{chunkUpload,markdown}.test.js` |
 | 20 | 评测同链路 | 评测自行拼装 `rank()`，参数与线上脱节，改配置不影响报告 | 评测走 `fuse → TopKPolicy.decide → select`，读与线上同名的 `SCENEMIND_*` 环境变量；报告新增「生效策略配置」小节 | 重构 | `OfflineEvaluatorTest`；CI 报告 diff 门禁 |
 | 21 | 自检断言 | 8 条，只覆盖相对基线不退化 | 11 条，新增 3 条绝对阈值：Recall ≥ 0.75、时间覆盖率 ≥ 0.75、冗余率 ≤ 0.20 | 新增 | `bash scripts/run-benchmark.sh` 输出 |
 | 22 | MCP Server | 无，外部 Agent 只能自己调后端接口 | `mcp/`：零外部依赖、stdio JSON-RPC 2.0，把长视频交给 SceneMind 分析，并把带时间戳的证据结果返回给调用方 Agent | 新增 | `mcp/` 的 `node --test` 用例；`mcp/README.md` |

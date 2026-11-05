@@ -1,5 +1,6 @@
 import { API_BASE } from './lib/config.js'
-import { normalizeHttpUrl, isSameVideo, parseVideoUrl, withTimestamp } from './lib/urlParser.js'
+import { normalizeHttpUrl, isSameVideo, parseVideoUrl, resolveVideoUrl, withTimestamp } from './lib/urlParser.js'
+import { uploadVideoInChunks, validateVideoFile } from './lib/chunkUpload.js'
 import { consumeTaskStream } from './lib/sseParser.js'
 import { renderResult } from './lib/markdownView.js'
 import { ANALYSIS_STAGES, analysisStageLabelOf, analysisStageOf } from './lib/stageProgress.js'
@@ -21,6 +22,9 @@ const els = {
   readyView: $('ready-view'),
   videoUrl: $('video-url'),
   grabBtn: $('grab-btn'),
+  videoFile: $('video-file'),
+  uploadBtn: $('upload-btn'),
+  uploadProgress: $('upload-progress'),
   goal: $('goal'),
   mode: $('mode'),
   submitBtn: $('submit-btn'),
@@ -28,6 +32,10 @@ const els = {
   stageList: $('stage-list'),
   statusMessage: $('status-message'),
   result: $('result'),
+  followUpBox: $('follow-up-box'),
+  followUpQuestion: $('follow-up-question'),
+  followUpBtn: $('follow-up-btn'),
+  followUpAnswer: $('follow-up-answer'),
   backBtn: $('back-btn')
 }
 
@@ -37,6 +45,9 @@ let noticeTimer = null
 let lastProgressStage = null
 let operationVersion = 0
 let sourceVideoUrl = ''
+let currentMediaId = null
+let currentGoal = ''
+let currentMode = ''
 
 async function getToken() {
   const data = await chrome.storage.local.get(TOKEN_KEY)
@@ -141,6 +152,7 @@ function showView(name) {
 function setBusy(busy) {
   els.submitBtn.disabled = busy
   els.grabBtn.disabled = busy
+  els.uploadBtn.disabled = busy
   els.loginSubmit.disabled = busy
 }
 
@@ -165,8 +177,13 @@ function markStages(currentStage, failed = false) {
 
 function resetRunningView() {
   els.statusMessage.textContent = ''
+  els.uploadProgress.textContent = ''
   els.result.replaceChildren()
   els.result.className = 'result'
+  els.followUpBox.hidden = true
+  els.followUpQuestion.value = ''
+  els.followUpAnswer.replaceChildren()
+  els.followUpBtn.disabled = false
   els.backBtn.hidden = true
   lastProgressStage = null
   markStages(null)
@@ -188,10 +205,11 @@ function finishRunning({ failed, text }) {
     // 失败信息是后端给的纯文本，直接作为文本节点放入，不做 Markdown 解析。
     els.result.textContent = text
   } else {
-    els.result.append(renderResult(text, { onSeek: seekTo }))
+    els.result.append(renderResult(text, { onSeek: sourceVideoUrl ? seekTo : undefined }))
   }
   els.result.className = `result visible${failed ? ' failed' : ''}`
   els.statusMessage.textContent = ''
+  els.followUpBox.hidden = failed
   els.backBtn.hidden = false
   setBusy(false)
   setTopStatus(failed ? '分析失败' : '分析完成')
@@ -204,6 +222,14 @@ function finishRunning({ failed, text }) {
  */
 async function seekTo(seconds) {
   try {
+    if (!sourceVideoUrl) {
+      showNotice('本地文件没有可跳转的视频页面', true)
+      return
+    }
+    if (sourceVideoUrl.includes('b23.tv')) {
+      showNotice('b23 短链无法定位视频，请打开完整视频页后重试', true)
+      return
+    }
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
     if (!tab?.url || !isSameVideo(tab.url, sourceVideoUrl)) {
       showNotice('当前标签页不是本次分析的视频，无法跳转', true)
@@ -361,57 +387,140 @@ async function submitAnalysis() {
     return
   }
   const version = ++operationVersion
-  sourceVideoUrl = url
-  els.videoUrl.value = url
   setBusy(true)
   showView('running')
   resetRunningView()
   setTopStatus('处理中…')
-  els.statusMessage.textContent = '正在登记视频链接…'
+  els.statusMessage.textContent = '正在解析视频链接…'
   try {
+    // b23.tv 短链先展开，失败则退回短链（后端 yt-dlp 仍可解析，只是无法做时间戳跳转）。
+    const resolved = await resolveVideoUrl(url)
+    if (version !== operationVersion) return
+    const effectiveUrl = resolved || url
+    sourceVideoUrl = effectiveUrl
+    els.videoUrl.value = effectiveUrl
+
+    els.statusMessage.textContent = '正在登记视频链接…'
     const form = new FormData()
-    form.append('url', url)
+    form.append('url', effectiveUrl)
     const media = await requestJson('/media/upload-url', { method: 'POST', body: form })
     if (version !== operationVersion) return
     const mediaId = media?.id
     if (!mediaId) throw new Error('后端未返回视频 ID，无法提交分析')
 
-    els.statusMessage.textContent = '正在提交分析任务…'
-    let mode = els.mode.value || 'AUTO'
-    if (mode === 'AUTO') {
-      try {
-        const decision = await requestJson('/analysis/route', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ goal })
-        })
-        mode = decision?.mode || 'GENERAL'
-      } catch (error) {
-        if (version !== operationVersion || error.status === 401) return
-        // 路由不可用时回退通用模式，不阻断分析（与 README 行为一致）。
-        mode = 'GENERAL'
-      }
-    }
-    if (version !== operationVersion) return
-
-    const params = new URLSearchParams({ id: String(mediaId), goal, mode })
-    const response = await apiRequest(`/analysis/ai?${params}`, { method: 'POST' })
-    const message = await response.text()
-    if (version !== operationVersion) return
-    if (response.ok || response.status === 409) {
-      // 202 受理 / 200 已有结果 / 409 同任务进行中，都通过 SSE 拿阶段与终态。
-      els.statusMessage.textContent = '任务已提交，正在等待 Agent 流水线…'
-      startStream(mediaId, goal, mode)
-    } else {
-      showView('ready')
-      setBusy(false)
-      showNotice(message || '提交失败', true)
-    }
+    await analyzeMedia(mediaId, goal, version)
   } catch (error) {
     if (version !== operationVersion) return
     showView('ready')
     setBusy(false)
     showNotice(error.message || String(error), true)
+  }
+}
+
+async function analyzeMedia(mediaId, goal, version) {
+  els.statusMessage.textContent = '正在提交分析任务…'
+  let mode = els.mode.value || 'AUTO'
+  if (mode === 'AUTO') {
+    try {
+      const decision = await requestJson('/analysis/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goal })
+      })
+      mode = decision?.mode || 'GENERAL'
+    } catch (error) {
+      if (version !== operationVersion || error.status === 401) return
+      // 路由不可用时回退通用模式，不阻断分析（与 README 行为一致）。
+      mode = 'GENERAL'
+    }
+  }
+  if (version !== operationVersion) return
+
+  const params = new URLSearchParams({ id: String(mediaId), goal, mode })
+  const response = await apiRequest(`/analysis/ai?${params}`, { method: 'POST' })
+  const message = await response.text()
+  if (version !== operationVersion) return
+  if (response.ok || response.status === 409) {
+    currentMediaId = mediaId
+    currentGoal = goal
+    currentMode = mode
+    // 202 受理 / 200 已有结果 / 409 同任务进行中，都通过 SSE 拿阶段与终态。
+    els.statusMessage.textContent = '任务已提交，正在等待 Agent 流水线…'
+    startStream(mediaId, goal, mode)
+  } else {
+    showView('ready')
+    setBusy(false)
+    showNotice(message || '提交失败', true)
+  }
+}
+
+async function submitLocalFile() {
+  if (els.uploadBtn.disabled || els.submitBtn.disabled) return
+  const file = els.videoFile.files?.[0]
+  const invalid = validateVideoFile(file)
+  if (invalid) {
+    showNotice(invalid, true)
+    return
+  }
+  const goal = els.goal.value.trim()
+  if (!goal) {
+    showNotice('请填写分析目标', true)
+    return
+  }
+  if (goal.length > 500) {
+    showNotice('分析目标不能超过 500 字', true)
+    return
+  }
+  const version = ++operationVersion
+  sourceVideoUrl = '' // 本地文件没有可跳转的视频页面
+  setBusy(true)
+  showView('running')
+  resetRunningView()
+  setTopStatus('上传中…')
+  try {
+    const media = await uploadVideoInChunks(file, {
+      request: apiRequest,
+      onProgress: progress => {
+        els.uploadProgress.textContent =
+          `上传中 ${progress.percent}%（${progress.completedChunks}/${progress.totalChunks} 分片）`
+      }
+    })
+    if (version !== operationVersion) return
+    els.uploadProgress.textContent = ''
+    await analyzeMedia(media.id, goal, version)
+  } catch (error) {
+    if (version !== operationVersion) return
+    showView('ready')
+    setBusy(false)
+    showNotice(error.message || String(error), true)
+  }
+}
+
+async function submitFollowUp() {
+  const question = els.followUpQuestion.value.trim()
+  if (!question) {
+    showNotice('请输入追问内容', true)
+    return
+  }
+  if (!currentMediaId) {
+    showNotice('当前没有可追问的分析结果', true)
+    return
+  }
+  els.followUpBtn.disabled = true
+  try {
+    const params = new URLSearchParams({ id: String(currentMediaId), question })
+    if (currentGoal) params.set('goal', currentGoal)
+    if (currentMode) params.set('mode', currentMode)
+    const answer = await requestJson(`/analysis/follow-up?${params}`, { method: 'POST' })
+    const item = document.createElement('div')
+    item.className = 'follow-up-item'
+    item.textContent = typeof answer === 'string' ? answer : JSON.stringify(answer, null, 2)
+    els.followUpAnswer.append(item)
+    els.followUpQuestion.value = ''
+  } catch (error) {
+    showNotice(error.message || String(error), true)
+  } finally {
+    els.followUpBtn.disabled = false
   }
 }
 
@@ -457,6 +566,8 @@ async function init() {
   els.loginForm.addEventListener('submit', handleLogin)
   els.grabBtn.addEventListener('click', () => enterReadyView())
   els.submitBtn.addEventListener('click', submitAnalysis)
+  els.uploadBtn.addEventListener('click', submitLocalFile)
+  els.followUpBtn.addEventListener('click', submitFollowUp)
   els.backBtn.addEventListener('click', () => {
     operationVersion += 1
     stopStream()

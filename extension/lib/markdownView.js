@@ -65,12 +65,41 @@ function renderBlock(block, context, { inIntro }) {
     }
     case 'list': {
       const list = doc.createElement(block.ordered ? 'ol' : 'ul')
-      for (const item of block.items) {
+      block.items.forEach((item, index) => {
         const li = doc.createElement('li')
         li.append(...renderInline(item, context))
+        const child = block.subLists?.[index]
+        if (child) li.append(renderBlock(child, context, { inIntro }))
         list.append(li)
-      }
+      })
       return list
+    }
+    case 'table': {
+      const table = doc.createElement('table')
+      table.className = 'result-table'
+      const thead = doc.createElement('thead')
+      const headerRow = doc.createElement('tr')
+      block.headers.forEach((cell, index) => {
+        const th = doc.createElement('th')
+        if (block.align?.[index]) th.style.textAlign = block.align[index]
+        th.append(...renderInline(cell, context))
+        headerRow.append(th)
+      })
+      thead.append(headerRow)
+      table.append(thead)
+      const tbody = doc.createElement('tbody')
+      for (const row of block.rows) {
+        const tr = doc.createElement('tr')
+        row.forEach((cell, index) => {
+          const td = doc.createElement('td')
+          if (block.align?.[index]) td.style.textAlign = block.align[index]
+          td.append(...renderInline(cell, context))
+          tr.append(td)
+        })
+        tbody.append(tr)
+      }
+      table.append(tbody)
+      return table
     }
     // 结果提示这类引用块渲染成 callout，避免「部分结论未通过校验」被淹没在正文里。
     case 'quote': {

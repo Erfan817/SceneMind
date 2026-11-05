@@ -17,6 +17,7 @@ const FENCE = /^```(\w*)\s*$/
 const QUOTE_LINE = /^>\s?(.*)$/
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/
 const ORDERED_ITEM = /^\s*\d+[.)]\s+/
+const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/
 const HORIZONTAL_RULE = /^(?:-{3,}|\*{3,}|_{3,})$/
 // 顺序敏感：** 必须排在 * 之前，否则粗体会被当成两个斜体。
 const INLINE = /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(\[([^\]]*)\]\(([^)\s]+)\))|(\[((?:\d{1,2}:)?\d{1,2}:\d{2})\](?!\())/g
@@ -115,6 +116,7 @@ function readBlock(lines, index) {
   }
   if (QUOTE_LINE.test(line)) return readQuote(lines, index)
   if (LIST_ITEM.test(line)) return readList(lines, index)
+  if (isTableStart(lines, index)) return readTable(lines, index)
   return readParagraph(lines, index)
 }
 
@@ -141,18 +143,68 @@ function readQuote(lines, index) {
 }
 
 function readList(lines, index) {
+  const [block, next] = parseListLevel(lines, index, indentOf(lines[index]))
+  return [block, next]
+}
+
+function indentOf(line) {
+  return /^(\s*)/.exec(line)[1].length
+}
+
+/** 按缩进递归解析嵌套列表；同级列表项仍把 tokens 放在 items 里，保持既有结构。 */
+function parseListLevel(lines, index, baseIndent) {
   const ordered = ORDERED_ITEM.test(lines[index])
   const items = []
+  const subLists = []
   let cursor = index
   while (cursor < lines.length) {
     const item = LIST_ITEM.exec(lines[cursor])
     if (!item) break
-    // 与首项类型不一致时换一个列表，避免有序无序混成一个。
+    const indent = indentOf(lines[cursor])
+    if (indent < baseIndent) break
+    if (indent > baseIndent) {
+      if (items.length === 0) break
+      const [child, next] = parseListLevel(lines, cursor, indent)
+      subLists[items.length - 1] = child
+      cursor = next
+      continue
+    }
     if (ORDERED_ITEM.test(lines[cursor]) !== ordered) break
     items.push(parseInline(item[1].trim()))
+    subLists.push(null)
     cursor += 1
   }
-  return [{ type: 'list', ordered, items }, cursor]
+  return [{ type: 'list', ordered, items, subLists }, cursor]
+}
+
+function isTableStart(lines, index) {
+  return lines[index].includes('|')
+    && index + 1 < lines.length
+    && TABLE_SEPARATOR.test(lines[index + 1])
+}
+
+function splitTableRow(line) {
+  return line.trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map(cell => cell.trim())
+}
+
+function readTable(lines, index) {
+  const headers = splitTableRow(lines[index]).map(parseInline)
+  const align = splitTableRow(lines[index + 1]).map(cell => {
+    const left = cell.startsWith(':')
+    const right = cell.endsWith(':')
+    return left && right ? 'center' : right ? 'right' : left ? 'left' : null
+  })
+  const rows = []
+  let cursor = index + 2
+  while (cursor < lines.length && lines[cursor].trim() && lines[cursor].includes('|')) {
+    rows.push(splitTableRow(lines[cursor]).map(parseInline))
+    cursor += 1
+  }
+  return [{ type: 'table', headers, align, rows }, cursor]
 }
 
 function readParagraph(lines, index) {

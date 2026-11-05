@@ -35,6 +35,11 @@
         <textarea id="video-url" rows="2" placeholder="粘贴视频链接，或点击下方按钮自动抓取当前页"></textarea>
       </label>
       <button id="grab-btn" type="button" class="ghost">抓取当前页链接</button>
+      <label class="field">或者选择本地视频
+        <input id="video-file" type="file" accept="video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm" />
+      </label>
+      <button id="upload-btn" type="button" class="ghost">上传本地文件并分析</button>
+      <p id="upload-progress" class="status" role="status" aria-live="polite"></p>
       <label class="field">分析目标
         <textarea id="goal" rows="3" maxlength="500"></textarea>
       </label>
@@ -56,6 +61,13 @@
       <p id="status-message" class="status" role="status" aria-live="polite"></p>
       <!-- 渲染后的结果容器：由 markdownView.js 用 createElement 填充，不经过 innerHTML -->
       <div id="result" class="result"></div>
+      <div id="follow-up-box" class="follow-up" hidden>
+        <label class="field">继续追问
+          <textarea id="follow-up-question" rows="2" maxlength="500" placeholder="基于视频继续追问…"></textarea>
+        </label>
+        <button id="follow-up-btn" type="button" class="ghost">追问</button>
+        <div id="follow-up-answer" class="follow-up-answer"></div>
+      </div>
       <button id="back-btn" type="button" class="ghost" hidden>返回</button>
     </section>
   </main>

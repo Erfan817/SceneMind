@@ -117,6 +117,28 @@ test('parseBlocks 识别水平线', () => {
   assert.deepEqual(parseBlocks('---'), [{ type: 'hr' }])
 })
 
+test('parseBlocks 解析 Markdown 表格', () => {
+  const [block] = parseBlocks('| 项目 | 值 |\n| --- | ---: |\n| A | 1 |')
+  assert.equal(block.type, 'table')
+  assert.deepEqual(block.headers, [
+    [{ type: 'text', value: '项目' }],
+    [{ type: 'text', value: '值' }]
+  ])
+  assert.deepEqual(block.rows, [[
+    [{ type: 'text', value: 'A' }],
+    [{ type: 'text', value: '1' }]
+  ]])
+  assert.deepEqual(block.align, [null, 'right'])
+})
+
+test('parseBlocks 保留嵌套列表层级', () => {
+  const [block] = parseBlocks('- 甲\n  - 子1\n  - 子2\n- 乙')
+  assert.equal(block.items.length, 2)
+  assert.equal(block.subLists[0].items.length, 2)
+  assert.deepEqual(block.subLists[0].items[0], [{ type: 'text', value: '子1' }])
+  assert.equal(block.subLists[1], null)
+})
+
 test('parseBlocks 把连续文本行合成一个段落', () => {
   const blocks = parseBlocks('第一行\n第二行')
   assert.equal(blocks.length, 1)

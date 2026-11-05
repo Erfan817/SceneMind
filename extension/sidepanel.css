@@ -416,3 +416,16 @@ a {
 .timestamp:disabled {
   opacity: 0.5;
 }
+
+/* 本地文件上传 */
+#video-file { width: 100%; font-size: 0.8rem; color: var(--text-sub); }
+#upload-progress { margin: 4px 0 8px; }
+
+/* 结果表格 */
+.result-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 0.82rem; }
+.result-table th, .result-table td { border: 1px solid var(--border-tech); padding: 4px 6px; }
+.result-table th { background: rgba(255, 255, 255, 0.04); text-align: left; }
+
+/* 追问 */
+.follow-up { margin-top: 16px; border-top: 1px solid var(--border-tech); padding-top: 12px; }
+.follow-up-item { margin-top: 8px; padding: 8px; background: rgba(255, 255, 255, 0.04); border-radius: 6px; white-space: pre-wrap; }
