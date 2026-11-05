@@ -61,6 +61,7 @@
 6. **Nginx**：`/opt/scenemind/web` 作 root，`try_files ... /index.html` 支持 SPA；`/user /media /analysis /admin /health /v3 /swagger-ui` 反代到 `127.0.0.1:9090`；SSE 需要 `proxy_buffering off`；`client_max_body_size 2048m`。
    - **非标准端口必须用 `proxy_set_header Host $http_host;`**（保留端口）。若用 `$host`，后端会把请求视为跨域，浏览器登录报 `Invalid CORS request`。
    - `.env` 的 `CORS_ALLOWED_ORIGINS` 要写实际访问地址（含端口，如 `http://IP:41554`），否则同样会被 CORS 拦下。
+   - **浏览器播放**：`MINIO_PUBLIC_BASE` 设为 `http://公网地址/minio`，并加 `location ^~ /minio/ { proxy_pass http://127.0.0.1:9000/; proxy_set_header Host 127.0.0.1:9000; proxy_buffering off; }`；否则 `/media/playback` 返回 `127.0.0.1:9000` 内网地址，浏览器无法播放。
 7. **MCP HTTP（可选）**：下载 Node 22（如 `https://mirrors.aliyun.com/nodejs-release/v22.14.0/node-v22.14.0-linux-x64.tar.xz`）到 `/opt/node22`，systemd 启动 `src/httpServer.js` 监听 `127.0.0.1:8090`，Nginx 用 `location ^~ /mcp { auth_basic off; proxy_pass http://127.0.0.1:8090; }` 暴露；token 放 `/etc/scenemind-mcp.env`（chmod 600）。
 
 ## 4. 更新发布

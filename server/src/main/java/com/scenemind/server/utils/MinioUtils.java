@@ -19,6 +19,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
 import java.nio.file.Files;
+import java.util.Locale;
 import java.util.UUID;
 
 @Component
@@ -29,21 +30,23 @@ public class MinioUtils {
     private final MinioClient minioClient;
     private final String bucketName;
     private final String endpoint;
+    private final String publicBase;
 
     public MinioUtils(MinioClient minioClient,
                       @Value("${minio.bucketName}") String bucketName,
-                      @Value("${minio.endpoint}") String endpoint) {
+                      @Value("${minio.endpoint}") String endpoint,
+                      @Value("${minio.public-base:}") String publicBase) {
         this.minioClient = minioClient;
         this.bucketName = bucketName;
         this.endpoint = endpoint.replaceAll("/+$", "");
+        String configured = publicBase == null ? "" : publicBase.replaceAll("/+$", "");
+        this.publicBase = configured.isBlank() ? this.endpoint : configured;
     }
 
     public String uploadFile(MultipartFile file) throws Exception {
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("file is empty");
         String objectName = UUID.randomUUID() + fileSuffix(file.getOriginalFilename());
-        String contentType = file.getContentType() == null
-                ? "application/octet-stream"
-                : file.getContentType();
+        String contentType = resolveContentType(file.getOriginalFilename(), file.getContentType());
         try (InputStream inputStream = file.getInputStream()) {
             minioClient.putObject(PutObjectArgs.builder()
                     .bucket(bucketName)
@@ -70,8 +73,7 @@ public class MinioUtils {
                 : objectPrefix.replaceAll("^/+|/+$", "") + "/";
         String objectName = normalizedPrefix + UUID.randomUUID() + fileSuffix(originalFilename);
         validateObjectName(objectName);
-        String contentType = Files.probeContentType(file.toPath());
-        if (contentType == null) contentType = "application/octet-stream";
+        String contentType = resolveContentType(originalFilename, Files.probeContentType(file.toPath()));
         try (FileInputStream inputStream = new FileInputStream(file)) {
             minioClient.putObject(PutObjectArgs.builder()
                     .bucket(bucketName)
@@ -92,7 +94,7 @@ public class MinioUtils {
                 .bucket(bucketName)
                 .object(objectName)
                 .stream(inputStream, size, -1)
-                .contentType(contentType)
+                .contentType(resolveContentType(objectName, contentType))
                 .build());
         return objectUrl(objectName);
     }
@@ -144,12 +146,16 @@ public class MinioUtils {
     public String readableSource(String source) {
         if (source == null || !source.startsWith(endpoint + "/" + bucketName + "/")) return source;
         try {
-            return minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+            String presigned = minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
                     .method(Method.GET)
                     .bucket(bucketName)
                     .object(objectName(source))
                     .expiry(60 * 60)
                     .build());
+            // 预签名按 minio.endpoint 的 Host 计算；浏览器无法访问内网地址时，
+            // 把前缀替换为对外前缀（Nginx /minio 反代时需保持与签名一致的 Host）。
+            if (publicBase.equals(endpoint)) return presigned;
+            return publicBase + presigned.substring(endpoint.length());
         } catch (Exception e) {
             throw new IllegalStateException("MinIO 预签名地址生成失败", e);
         }
@@ -183,5 +189,20 @@ public class MinioUtils {
         if (dot < 0 || filename.length() - dot > 11) return "";
         String suffix = filename.substring(dot).toLowerCase();
         return suffix.matches("\\.[a-z0-9]+") ? suffix : "";
+    }
+
+    /** 上传时客户端可能给 application/octet-stream；按扩展名补成浏览器可识别的视频 MIME。 */
+    static String resolveContentType(String filename, String declared) {
+        if (declared != null && !declared.isBlank()
+                && !"application/octet-stream".equalsIgnoreCase(declared)) {
+            return declared;
+        }
+        String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) return "video/mp4";
+        if (lower.endsWith(".mov")) return "video/quicktime";
+        if (lower.endsWith(".mkv")) return "video/x-matroska";
+        if (lower.endsWith(".webm")) return "video/webm";
+        if (lower.endsWith(".avi")) return "video/x-msvideo";
+        return declared == null || declared.isBlank() ? "application/octet-stream" : declared;
     }
 }

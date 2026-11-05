@@ -75,7 +75,7 @@ server/.../service/AgentTelemetry.java                                       （
 server/.../service/AgentEvaluationService.java                               （新增 3 个指标 + 复用 ranking 配置）
 ```
 
-**测试（新增 11 个测试类；`server` 现有 25 个测试类 / 80 个用例）**
+**测试（新增 12 个测试类；`server` 现有 26 个测试类 / 82 个用例）**
 
 ```
 core 纯函数层（5 个文件 / 31 个用例）
@@ -92,6 +92,9 @@ server/.../eval/RealAnnotationEvaluationTest.java
 
 认证与配额（1 个文件 / 3 个用例）
 server/.../service/AuthServiceTest.java
+
+工具与 MIME（1 个文件 / 2 个用例）
+server/.../utils/MinioUtilsTest.java
 ```
 
 **工程与文档**
@@ -121,7 +124,7 @@ server/pom.xml                              groupId 规范化
 | 命令 | 结果 |
 | --- | --- |
 | `JAVA_HOME=<JDK21> mvnw.cmd -B test-compile`（server，Windows） | 退出码 0 |
-| `JAVA_HOME=<JDK21> mvnw.cmd -B test`（server，Windows） | 25 个测试类、80 个用例、0 失败、0 错误 |
+| `JAVA_HOME=<JDK21> mvnw.cmd -B test`（server，Windows） | 26 个测试类、82 个用例、0 失败、0 错误 |
 | `bash scripts/run-benchmark.sh` | 11 条自检断言全部通过，报告生成 |
 | `npm test`（client，等价 `node --test src/*.test.js`） | 33 个前端用例全部通过 |
 | `node --test test/*.test.js`（mcp） | 52 个用例全部通过，无需后端 |
