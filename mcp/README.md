@@ -5,7 +5,7 @@
 - **零外部依赖**：只用 Node.js 内置模块（`node:http` / `node:https` / `node:test` / `node:readline` …），不需要 `npm install`，不引入 `@modelcontextprotocol/sdk`。
 - **Node 22+**，ESM（`"type": "module"`）。
 - **stdio 传输**：换行分隔的 JSON-RPC 2.0（MCP stdio 标准），**不使用** Content-Length 帧；`stdout` 只输出 JSON-RPC 消息，所有日志走 `stderr`。
-- 当前**只做 stdio**，远程 HTTP（Streamable HTTP）尚未实现，见 `docs/MCP_SERVER.md`。
+- **Streamable HTTP 传输**：常驻 `src/httpServer.js`，`POST /mcp` 收 JSON-RPC，`GET /health` 健康检查；必须配置 `SCENEMIND_MCP_TOKEN`，请求带 `Authorization: Bearer <token>`。
 
 ---
 
@@ -13,8 +13,9 @@
 
 ```bash
 cd mcp
-node --test test/*.test.js        # 48 个测试，全部内置，无需后端
-SCENEMIND_DEMO=1 node src/server.js   # 手工喂一行 initialize 即可看到合法响应
+node --test test/*.test.js        # 52 个测试，全部内置，无需后端
+SCENEMIND_DEMO=1 node src/server.js       # stdio：手工喂一行 initialize
+SCENEMIND_MCP_TOKEN=xxx SCENEMIND_DEMO=1 node src/httpServer.js  # HTTP：POST /mcp
 ```
 
 手工验证（macOS/Linux 或 PowerShell）：
@@ -36,6 +37,9 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 | `SCENEMIND_PASSWORD` | 空 | 自动登录密码（配合 `SCENEMIND_EMAIL`，惰性调用 `POST /user/login` 换 token） |
 | `SCENEMIND_DEMO` | 空 | `1` / `true` 开启 demo 模式：不连后端，返回内置合成数据 |
 | `SCENEMIND_TIMEOUT_MS` | `15000` | 单次 HTTP 请求超时（毫秒，上限 600000） |
+| `SCENEMIND_MCP_TOKEN` | 空 | **HTTP 模式必填**：客户端请求需带 `Authorization: Bearer <token>` |
+| `SCENEMIND_MCP_HTTP_PORT` | `8090` | HTTP 模式监听端口 |
+| `SCENEMIND_MCP_HTTP_HOST` | `127.0.0.1` | HTTP 模式监听地址（远程部署保持 127.0.0.1，由反向代理暴露） |
 
 鉴权优先级：`SCENEMIND_TOKEN` 优先；否则若有 `SCENEMIND_EMAIL` + `SCENEMIND_PASSWORD`，在第一次业务调用前惰性登录换取 token；都没有时按「无鉴权」尽力而为（真实后端会返回 401，错误会被归一化后返回）。
 
@@ -95,6 +99,34 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 }
 ```
 
+### 远程 HTTP（Streamable HTTP）
+
+支持 `url` 的客户端可以直接连（服务端需先以 `SCENEMIND_MCP_TOKEN=... node src/httpServer.js` 常驻）：
+
+```json
+{
+  "mcpServers": {
+    "scenemind": {
+      "url": "https://your-host/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SCENEMIND_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+命令行自测：
+
+```bash
+curl -s -X POST https://your-host/mcp \
+  -H "Authorization: Bearer $SCENEMIND_MCP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+> HTTP 模式下 `SCENEMIND_MCP_TOKEN` 是服务端环境变量；客户端的 `${...}` 展开取决于客户端实现。不要把 token 写进仓库或共享配置。
+
 > **不要把 `SCENEMIND_TOKEN` / 密码写进这些 JSON 配置文件**（它们常被同步、备份或提交到仓库）。见下方「安全说明」。
 
 ---
@@ -135,17 +167,17 @@ SCENEMIND_DEMO=1 node src/server.js
 - **完全不连后端**：所有方法返回 `src/demoData.js` 里的内置合成数据，可离线演示与测试。
 - 内置一条与 `docs/benchmark-report.md` 一致的音画冲突示例：口播「**8月1日**上线」/ 画面 OCR「**8月3日**」。
 - demo 的 `get_result` 直接返回 `COMPLETED`，因此 `wait_for_result` 会立即返回，适合演示完整链路。
-- demo 的 `evaluation` 附带**示例性**的结构化 `conflicts` 与 `evidenceAudit`，用来展示「后端若提供结构化信号就直接用」的代码路径；当前 Java 后端实际上只通过 `agent-evaluation` 暴露聚合信号，并不返回该对象。
+- demo 的 `evaluation` 附带**示例性**的结构化 `conflicts` 与 `evidenceAudit`；生产后端在 `/analysis/agent-evaluation` 与 `/analysis/agent-trace` 返回 `evidenceAudit`，`/analysis/analysis-status` 返回 `conflicts`，客户端优先采用这些结构化字段，缺失时回退到聚合信号。
 
 ---
 
 ## 安全说明
 
 - **token / 密码不要写进配置文件**。MCP 客户端的 JSON 配置通常落盘、被同步/备份。推荐做法：在启动 MCP 客户端的 shell / 系统服务环境里 `export SCENEMIND_TOKEN=...`（或 `SCENEMIND_EMAIL` + `SCENEMIND_PASSWORD`），或用一个包装脚本从系统密钥环读取后 `exec node src/server.js`；配置文件的 `env` 里只放 `SCENEMIND_API_BASE` / `SCENEMIND_DEMO` 这类非敏感项。
-- **本地可信环境边界**：SceneMind 后端的定位是「本地 / 单机可信环境」，不做多租户、计费、公网级鉴权（见仓库 `README.md` 能力边界）。本 MCP Server 是被本地 Agent 拉起的 stdio 子进程，继承调用方权限，token 等同于该用户媒体库的完整访问权。只把它接入可信的本地 Agent，不要暴露给不可信输入或公网。
+- **本地可信环境边界**：SceneMind 后端默认定位是「本地 / 单机可信环境」，不做多租户、计费、公网级鉴权（见仓库 `README.md` 能力边界）。stdio 模式继承调用方权限；HTTP 模式必须设置 `SCENEMIND_MCP_TOKEN`，并建议只监听 `127.0.0.1`、由带 TLS 的反向代理暴露 `/mcp`。token 等同于该用户媒体库的完整访问权，不要公开。
 - **不要把 `SCENEMIND_API_BASE` 指向不可信主机**：Bearer token 会随请求发往该地址。
-- **stdout 是协议通道**：任何写到 stdout 的非 JSON 内容都会破坏 MCP 会话；日志一律走 stderr。
-- **当前只有 stdio**：远程 Streamable HTTP 需要认证、TLS 与公网暴露等额外设计，列为下一步，尚未实现（见 `docs/MCP_SERVER.md`）。
+- **stdout 是协议通道**：stdio 模式下任何写到 stdout 的非 JSON 内容都会破坏 MCP 会话；日志一律走 stderr。
+- **HTTP 传输的范围**：已实现无状态 `POST /mcp` 请求-响应；`GET /mcp` 的服务端推送/可恢复会话尚未实现，长任务用 `wait_for_result` 轮询。
 
 ---
 

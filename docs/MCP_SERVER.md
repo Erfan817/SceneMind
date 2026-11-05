@@ -126,28 +126,23 @@ Agent ↔ stdio JSON-RPC 2.0 ↔ server.js
 
 ---
 
-## 4. stdio 与远程部署的取舍
+## 4. 传输：stdio 与 Streamable HTTP
 
-**当前只实现 stdio（换行分隔 JSON-RPC 2.0）。** 没有实现远程 HTTP / Streamable HTTP，本文不声称已实现远程能力。
+两种传输共用同一套 `handlers / tools / resources`：
 
-为什么先选 stdio：
-
-| 维度 | stdio（当前） | 远程 Streamable HTTP（下一步） |
+| 维度 | stdio | Streamable HTTP |
 | --- | --- | --- |
-| 部署形态 | MCP 客户端本地拉起子进程 | 独立常驻服务，监听端口 |
-| 认证 | 继承本地进程环境；token 由本地环境注入 | 必须自己实现认证（OAuth2 / API Key / mTLS）、会话、租户隔离 |
-| 暴露面 | 不监听端口，天然不对外 | 需要公网/内网暴露、TLS、WAF、限流、审计 |
-| 与 SceneMind 定位 | 契合「本地 / 单机可信环境」 | 与「不做多租户、公网级鉴权」的现有边界冲突，需先补平台侧能力 |
-| 适用场景 | 个人桌面 Agent、离线演示、CI 测试 | 多 Agent 共享平台服务、跨机器 |
+| 启动 | MCP 客户端本地拉起 `node src/server.js` | 常驻 `node src/httpServer.js`，默认监听 `127.0.0.1:8090` |
+| 端点 | stdin/stdout 换行分隔 JSON-RPC | `POST /mcp`（JSON-RPC，响应 `application/json`）；`GET /health` |
+| 认证 | 继承本地环境变量 | **必须**配置 `SCENEMIND_MCP_TOKEN`，请求带 `Authorization: Bearer <token>` |
+| 适用 | 个人桌面 Agent、离线演示、CI | 跨机器 / 多 Agent 共享 |
 
-远程化的前置条件（因此列为下一步，而非现状）：
+远程部署建议：
 
-1. 平台侧补公网级鉴权与多租户隔离（当前 `AuthInterceptor` 只做单用户 token 校验）；
-2. MCP Server 增加认证层、会话管理、CORS、限流、审计日志；
-3. 传输改为 Streamable HTTP（`POST /mcp` + SSE / 可恢复会话），并配套 TLS 与部署运维；
-4. 长任务轮询在远程形态下可被服务端推送 / Webhook 替代，避免占用连接。
-
-在这些完成前，stdio + 本地可信环境是更安全、更贴合项目边界的选择。
+1. MCP Server 只监听 `127.0.0.1`，由 Nginx/Caddy 反代 `/mcp` 并启用 TLS；
+2. `SCENEMIND_MCP_TOKEN` 只放服务端环境变量（root-only），不要写进客户端配置；
+3. 平台侧目前仍是单用户、无多租户隔离，公网实例建议再套一层 Basic Auth / VPN / IP 白名单；
+4. `GET /mcp`（服务端推送 SSE）尚未实现；当前是无状态请求-响应模型，长任务由 `wait_for_result` 轮询。
 
 ---
 
@@ -220,5 +215,5 @@ demo 内置一条与 `docs/benchmark-report.md` 一致的音画冲突：口播�
 
 ## 7. 验证状态与依赖真实后端才能验证的部分
 
-- `cd mcp && node --test test/*.test.js`：48 个测试全绿。`server.test.js` 用 `node:http` 起本地假 SceneMind 服务并拉起子进程跑完整 `tools/call`；`demo.test.js` 验证离线 demo；`protocol.test.js` 验证纯函数与错误码。
+- `cd mcp && node --test test/*.test.js`：52 个测试全绿。`server.test.js` 用 `node:http` 起本地假 SceneMind 服务并拉起子进程跑完整 `tools/call`；`httpServer.test.js` 验证 Streamable HTTP 的鉴权、`tools/list`、通知 202 与健康检查；`demo.test.js` 验证离线 demo；`protocol.test.js` 验证纯函数与错误码。
 - **依赖真实后端才能验证**（当前只能用假服务验证协议与数据形状，不能验证真实业务语义）：真实 Spring Boot 的 token 会话、异步 202 到 `COMPLETED` 的真实耗时与阶段流转、真实 ASR/OCR 产出的证据与时间戳、`ConflictDetector` 的真实冲突判定、`agent-evaluation` 的真实指标数值、以及 `follow-up` / `evidence-search` 的真实模型回答。这些需要启动 `server/` 及其中间件（见仓库 `README.md` 快速开始）后联调。

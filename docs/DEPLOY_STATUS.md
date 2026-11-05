@@ -51,6 +51,7 @@ Docker Compose 方案因此不可用，改用 [`DEPLOY_BARE.md`](DEPLOY_BARE.md)
 - **SSE 断线补发**：事件带递增 `id`，前端重连带 `Last-Event-ID`，服务端补发最近 200 条；不再只拿当前快照。
 - **trace 采样**：检索诊断只保留前 20 条明细，避免长视频把 Redis 写爆。
 - **Agent 预算**：2C 机器实测 120s 不够一次 Critic 重跑，已调整为 `AGENT_MAX_DURATION_MS=600000` / `AGENT_MAX_ESTIMATED_TOKENS=200000`。
+- **MCP 远程传输**：已部署 `scenemind-mcp.service`（Node 22，监听 `127.0.0.1:8090`），Nginx 暴露 `/mcp`，Bearer token 鉴权；`POST /mcp` 实测 `tools/list` 返回 7 个工具。
 
 ## 4. 如果要做并发测试
 

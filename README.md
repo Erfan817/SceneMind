@@ -90,7 +90,7 @@
 
 新增 `mcp/`：零外部依赖的 MCP Server（只用 Node.js 内置模块，stdio JSON-RPC 2.0，不需要 `npm install`）。外部 Agent 把视频链接与分析目标交给它，它调用 SceneMind 后端，把带**时间戳 / 来源 / 原文**的结构化证据返回给对方 Agent，而不是一段无法核验的摘要。
 
-协议取舍、工具清单与错误语义见 `docs/MCP_SERVER.md`，本地接入方式见 `mcp/README.md`。当前只做 stdio；远程部署（Streamable HTTP + 鉴权）在路线图里。
+协议取舍、工具清单与错误语义见 `docs/MCP_SERVER.md`，接入方式见 `mcp/README.md`。支持 **stdio** 与 **Streamable HTTP**（`POST /mcp` + Bearer token）两种传输：桌面 Agent 可用 stdio，跨机器/多 Agent 可用 HTTP；远程部署仍需前置 TLS 与访问控制。
 
 ---
 
@@ -286,7 +286,7 @@ SceneMind
 - [ ] 接入真实标注视频集，验证召回收益而不只验证鲁棒性
 - [ ] 用评测报告驱动 RRF 参数自动寻优（`k` 与通道权重）
 - [ ] 完整 trace 时间轴回放：当前调试面板展示的是一次分析的诊断快照，还不能按时间轴回放整条链路
-- [ ] MCP 远程部署（Streamable HTTP + 鉴权），让远端 Agent 不必本地起 stdio 进程即可接入
+- [x] MCP 远程部署（Streamable HTTP + Bearer token），远端 Agent 不必本地起 stdio 进程即可接入
 
 ---
 

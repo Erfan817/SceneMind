@@ -58,7 +58,8 @@
    - MinIO：下载 `https://dl.minio.org.cn/server/minio/release/linux-amd64/minio`，systemd 启动；
    - RocketMQ：下载 `https://mirrors.aliyun.com/apache/rocketmq/5.3.4/rocketmq-all-5.3.4-bin-release.zip`，`brokerIP1 = 127.0.0.1`，JVM 压到 `-Xms192m -Xmx192m`。
 5. **后端服务**：`/opt/scenemind/.env` 提供环境变量，systemd 用 `EnvironmentFile` 注入；`QDRANT_ENABLED=false`。
-6. **Nginx**：`/opt/scenemind/web` 作 root，`try_files ... /index.html` 支持 SPA；`/user /media /analysis /admin /health` 反代到 `127.0.0.1:9090`；SSE 需要 `proxy_buffering off`；`client_max_body_size 2048m`。
+6. **Nginx**：`/opt/scenemind/web` 作 root，`try_files ... /index.html` 支持 SPA；`/user /media /analysis /admin /health /v3 /swagger-ui` 反代到 `127.0.0.1:9090`；SSE 需要 `proxy_buffering off`；`client_max_body_size 2048m`。
+7. **MCP HTTP（可选）**：下载 Node 22（如 `https://mirrors.aliyun.com/nodejs-release/v22.14.0/node-v22.14.0-linux-x64.tar.xz`）到 `/opt/node22`，systemd 启动 `src/httpServer.js` 监听 `127.0.0.1:8090`，Nginx 用 `location ^~ /mcp { auth_basic off; proxy_pass http://127.0.0.1:8090; }` 暴露；token 放 `/etc/scenemind-mcp.env`（chmod 600）。
 
 ## 4. 更新发布
 

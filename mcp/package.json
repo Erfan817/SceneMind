@@ -1,7 +1,7 @@
 {
   "name": "scenemind-mcp",
   "version": "1.0.0",
-  "description": "MCP server that exposes SceneMind long-video evidence analysis to other agents over stdio (zero runtime dependencies)",
+  "description": "MCP server that exposes SceneMind long-video evidence analysis to other agents over stdio or Streamable HTTP (zero runtime dependencies)",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -11,6 +11,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "start:http": "node src/httpServer.js",
     "test": "node --test test/*.test.js"
   },
   "license": "MIT",

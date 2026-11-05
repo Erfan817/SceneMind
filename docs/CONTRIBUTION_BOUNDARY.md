@@ -123,7 +123,7 @@ server/pom.xml                              groupId 规范化
 | `JAVA_HOME=<JDK21> mvnw.cmd -B test`（server，Windows） | 25 个测试类、80 个用例、0 失败、0 错误 |
 | `bash scripts/run-benchmark.sh` | 11 条自检断言全部通过，报告生成 |
 | `npm test`（client，等价 `node --test src/*.test.js`） | 33 个前端用例全部通过 |
-| `node --test test/*.test.js`（mcp） | 48 个用例全部通过，无需后端 |
+| `node --test test/*.test.js`（mcp） | 52 个用例全部通过，无需后端 |
 | `javac --release 21` 单独编译 `core/` | 退出码 0（证明零框架依赖） |
 | `bash scripts/smoke-test.sh` | 需要真实中间件 + API Key + 可分析的视频链接；缺依赖时按设计跳过 |
 

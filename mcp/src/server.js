@@ -13,11 +13,8 @@
 
 import readline from 'node:readline';
 import { readConfig, SceneMindClient } from './scenemindClient.js';
-import { handleLine, MCP_PROTOCOL_VERSION, JsonRpcError, ErrorCode } from './protocol.js';
-import { listTools, callTool } from './tools.js';
-import { listResources, readResource } from './resources.js';
-
-const SERVER_INFO = { name: 'scenemind-mcp', version: '1.0.0' };
+import { handleLine, ErrorCode } from './protocol.js';
+import { createHandlers } from './handlers.js';
 
 function log(...parts) {
   try {
@@ -30,52 +27,7 @@ function log(...parts) {
 const config = readConfig(process.env);
 const client = new SceneMindClient(config);
 const ctx = { client, config };
-
-const handlers = {
-  async initialize(params) {
-    return {
-      protocolVersion: params?.protocolVersion || MCP_PROTOCOL_VERSION,
-      capabilities: {
-        tools: { listChanged: false },
-        resources: { subscribe: false, listChanged: false },
-      },
-      serverInfo: SERVER_INFO,
-      instructions:
-        'SceneMind MCP：把长视频交给 SceneMind 平台做「证据可核验」的分析，' +
-        '并把带时间戳 / 来源 / 原文证据的结构化结果返回给调用方 Agent。' +
-        '典型流程：submit_video -> analyze -> wait_for_result / get_result。',
-    };
-  },
-
-  async 'notifications/initialized'() {
-    log('client sent notifications/initialized');
-    return {};
-  },
-
-  async ping() {
-    return {};
-  },
-
-  async 'tools/list'() {
-    return { tools: listTools() };
-  },
-
-  async 'tools/call'(params) {
-    const name = params?.name;
-    if (typeof name !== 'string') {
-      throw new JsonRpcError(ErrorCode.INVALID_PARAMS, 'tools/call 需要字符串参数 name');
-    }
-    return callTool(name, params?.arguments ?? {}, ctx);
-  },
-
-  async 'resources/list'() {
-    return listResources();
-  },
-
-  async 'resources/read'(params) {
-    return readResource(params?.uri, ctx);
-  },
-};
+const handlers = createHandlers(ctx);
 
 function writeResponse(response) {
   const messages = Array.isArray(response) ? response : [response];
