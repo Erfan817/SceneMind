@@ -1,0 +1,37 @@
+# 低配服务器（内存 < 4GB）覆盖：
+# - 关闭 Qdrant（应用自动降级到本地 cosine + 关键词检索）
+# - 压缩 MySQL / Redis / MinIO / RocketMQ / JVM 的内存占用
+# 用法：docker compose -f docker-compose.prod.yml -f deploy/compose.lowmem.override.yml ...
+services:
+  qdrant:
+    mem_limit: 128m
+
+  mysql:
+    mem_limit: 384m
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --performance_schema=OFF --innodb-buffer-pool-size=128M
+
+  redis:
+    mem_limit: 96m
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\" --maxmemory 64mb --maxmemory-policy allkeys-lru"]
+
+  minio:
+    mem_limit: 192m
+
+  rmqnamesrv:
+    mem_limit: 192m
+    environment:
+      JAVA_OPT_EXT: -server -Xms128m -Xmx128m -Xmn64m
+
+  rmqbroker:
+    mem_limit: 384m
+    environment:
+      JAVA_OPT_EXT: -server -Xms256m -Xmx256m -Xmn128m
+
+  server:
+    mem_limit: 640m
+    environment:
+      QDRANT_ENABLED: "false"
+      JAVA_OPTS: "-XX:MaxRAMPercentage=60 -XX:MaxMetaspaceSize=192m -XX:+UseSerialGC -Duser.timezone=Asia/Shanghai"
+
+  web:
+    mem_limit: 64m

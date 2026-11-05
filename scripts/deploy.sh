@@ -51,7 +51,14 @@ if (( ${#missing[@]} > 0 )); then
 fi
 
 echo "构建并启动（首次构建需要几分钟）..."
-docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+COMPOSE_ARGS=(-f docker-compose.prod.yml)
+mem_total_mb="$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 4096)"
+if (( mem_total_mb < 3800 )); then
+  echo "检测到内存 ${mem_total_mb}MB < 3800MB，启用低配覆盖（关闭 Qdrant、压缩各服务内存）。" >&2
+  COMPOSE_ARGS+=(-f deploy/compose.lowmem.override.yml)
+fi
+
+docker compose "${COMPOSE_ARGS[@]}" --env-file .env up -d --build
 
 echo "等待后端健康检查..."
 for _ in $(seq 1 60); do
@@ -62,7 +69,7 @@ for _ in $(seq 1 60); do
   sleep 5
 done
 
-docker compose -f docker-compose.prod.yml ps
+docker compose "${COMPOSE_ARGS[@]}" --env-file .env ps
 echo
 echo "站点地址：${SITE_ADDRESS}"
 echo "首次使用：打开站点 → 注册账号 → 按 docs/DEPLOY.md 提权为 ADMIN →"
