@@ -164,6 +164,7 @@ flowchart LR
 ## 快速开始
 
 > 想直接在云服务器上跑一个公网实例？见 [docs/DEPLOY.md](docs/DEPLOY.md)：Docker Compose 一键起全栈，Caddy 自动 HTTPS。
+> 如果服务器网络访问不了 Docker Hub / GitHub / Let's Encrypt，见 [docs/DEPLOY_BARE.md](docs/DEPLOY_BARE.md)；已在一台 2C/1.9GB Ubuntu 22.04 上完成裸机部署与端到端验证，记录见 [docs/DEPLOY_STATUS.md](docs/DEPLOY_STATUS.md)。
 
 ### 前置条件
 

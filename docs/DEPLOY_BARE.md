@@ -2,6 +2,12 @@
 
 > 适用场景：服务器无法访问 Docker Hub / GitHub / Let's Encrypt（国内小带宽 VPS 常见）。
 > Docker Compose 方案见 [`DEPLOY.md`](DEPLOY.md)；本文件记录不依赖 Docker 的等价部署方式。
+> 实际部署环境与端到端验证记录见 [`DEPLOY_STATUS.md`](DEPLOY_STATUS.md)。
+
+> 环境实测补充：
+> - Ubuntu 22.04 自带 **FFmpeg 4.4** 不识别 `-fps_mode`（5.1+ 才有）；`VideoContextService` 已内置自动回退 `-vsync`。
+> - 硅基流动的 ASR 模型建议用 `Qwen/Qwen3-ASR-1.7B`（实测比 `TeleAI/TeleSpeechASR` 准）；模型列表会变，部署前先 `GET /v1/models` 确认。
+> - Nginx 若同时启用 Basic Auth与应用 Bearer Token，必须给 API 路径加 `auth_basic off;`，否则两者抢同一个 `Authorization` 头。
 
 ## 1. 与 Docker 方案的差异
 
