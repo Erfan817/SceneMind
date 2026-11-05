@@ -1,0 +1,22 @@
+# 固定跨平台换行符：评测脚本与自动生成的报告必须保持 LF，
+# 否则 CI 里的 git diff 门禁与 bash 执行都会受影响。
+* text=auto
+
+*.java       text eol=lf
+*.md         text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+*.json       text eol=lf
+*.sql        text eol=lf
+*.properties text eol=lf
+*.js         text eol=lf
+*.vue        text eol=lf
+*.css        text eol=lf
+*.html       text eol=lf
+*.sh         text eol=lf
+docs/benchmark-report.md text eol=lf
+
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
