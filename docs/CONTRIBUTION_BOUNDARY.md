@@ -74,10 +74,10 @@ server/.../service/AgentTelemetry.java                                       （
 server/.../service/AgentEvaluationService.java                               （新增 3 个指标 + 复用 ranking 配置）
 ```
 
-**测试（新增 10 个测试类；`server` 现有 24 个测试类 / 74 个用例）**
+**测试（新增 11 个测试类；`server` 现有 25 个测试类 / 80 个用例）**
 
 ```
-core 纯函数层（5 个文件 / 29 个用例）
+core 纯函数层（5 个文件 / 31 个用例）
 server/src/test/java/com/scenemind/core/ranking/{HybridRankerTest,TopKPolicyTest}.java
 server/src/test/java/com/scenemind/core/evidence/{EvidenceAuditorTest,ConflictDetectorTest}.java
 server/src/test/java/com/scenemind/core/eval/OfflineEvaluatorTest.java
@@ -88,6 +88,9 @@ server/.../service/EvidenceRetryPolicyTest.java
 server/.../service/EvidenceAuditIntegrationTest.java
 server/.../service/AgentTelemetryTest.java
 server/.../eval/RealAnnotationEvaluationTest.java
+
+认证与配额（1 个文件 / 3 个用例）
+server/.../service/AuthServiceTest.java
 ```
 
 **工程与文档**
@@ -117,9 +120,9 @@ server/pom.xml                              groupId 规范化
 | 命令 | 结果 |
 | --- | --- |
 | `JAVA_HOME=<JDK21> mvnw.cmd -B test-compile`（server，Windows） | 退出码 0 |
-| `JAVA_HOME=<JDK21> mvnw.cmd -B test`（server，Windows） | 24 个测试类、74 个用例、0 失败、0 错误 |
+| `JAVA_HOME=<JDK21> mvnw.cmd -B test`（server，Windows） | 25 个测试类、80 个用例、0 失败、0 错误 |
 | `bash scripts/run-benchmark.sh` | 11 条自检断言全部通过，报告生成 |
-| `npm test`（client，等价 `node --test src/*.test.js`） | 32 个前端用例全部通过 |
+| `npm test`（client，等价 `node --test src/*.test.js`） | 33 个前端用例全部通过 |
 | `node --test test/*.test.js`（mcp） | 48 个用例全部通过，无需后端 |
 | `javac --release 21` 单独编译 `core/` | 退出码 0（证明零框架依赖） |
 | `bash scripts/smoke-test.sh` | 需要真实中间件 + API Key + 可分析的视频链接；缺依赖时按设计跳过 |

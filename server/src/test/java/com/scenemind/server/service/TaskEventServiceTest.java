@@ -10,6 +10,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -49,6 +50,22 @@ class TaskEventServiceTest {
         assertTrue(learning.getResponse().getContentAsString().contains("learning result"));
     }
 
+    @Test
+    void replaysOnlyEventsAfterLastEventIdOnReconnect() throws Exception {
+        TaskEventService events = new TaskEventService(mock(StringRedisTemplate.class), new ObjectMapper());
+        events.publishAnalysis(7L, "goal", TaskStatus.completed("first completion"), TaskStage.COMPLETED);
+        events.publishAnalysis(7L, "goal", TaskStatus.completed("second completion"), TaskStage.COMPLETED);
+        var mvc = MockMvcBuilders.standaloneSetup(new EventController(events)).build();
+
+        MvcResult result = mvc.perform(get("/replay-events").header("Last-Event-ID", "1")).andReturn();
+        mvc.perform(asyncDispatch(result));
+        String body = result.getResponse().getContentAsString();
+
+        assertTrue(body.contains("second completion"), "断线后应补发 Last-Event-ID 之后的事件");
+        assertFalse(body.contains("first completion"), "已收到过的事件不应重复补发");
+        assertTrue(body.contains("id:2"), "SSE 事件必须带递增序号");
+    }
+
     @RestController
     static class EventController {
         private final TaskEventService events;
@@ -64,6 +81,14 @@ class TaskEventServiceTest {
         SseEmitter events(@RequestParam AnalysisMode mode) {
             return events.subscribe(7L, TaskEventService.ANALYSIS, "goal", mode,
                     TaskStatus.of(TaskStatus.State.PROCESSING, "running"), TaskStage.CONSUMING);
+        }
+        @GetMapping(value = "/replay-events", produces = "text/event-stream")
+        SseEmitter replayEvents(
+                @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
+            return events.subscribe(7L, TaskEventService.ANALYSIS, "goal", AnalysisMode.GENERAL,
+                    () -> TaskEvent.of(TaskStatus.of(TaskStatus.State.PROCESSING, "fallback"),
+                            TaskStage.CONSUMING),
+                    lastEventId);
         }
     }
 }

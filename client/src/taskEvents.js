@@ -47,6 +47,7 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
     streams.set(key, { controller, id, type, scope })
     publish()
     let reconnectAttempt = 0
+    let lastEventId = null
     const isActive = () => !controller.signal.aborted
       && streams.get(key)?.controller === controller && isCurrentSession()
 
@@ -59,8 +60,11 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
     const run = async () => {
       while (isActive()) {
         try {
+          const headers = { Accept: 'text/event-stream' }
+          // 断线重连时带上最后收到的事件序号，服务端会补发缺失的阶段事件。
+          if (lastEventId != null) headers['Last-Event-ID'] = lastEventId
           const response = await apiRequest(path, {
-            headers: { Accept: 'text/event-stream' },
+            headers,
             signal: controller.signal
           })
           if (!isActive()) {
@@ -87,7 +91,7 @@ export function createTaskStreams({ onActiveChange = () => {} } = {}) {
             if (!isActive()) return
             reconnectAttempt = 0
             await onEvent(event, controller.signal)
-          }, controller.signal)
+          }, controller.signal, eventId => { lastEventId = eventId })
           if (terminal) {
             release()
             return
@@ -134,7 +138,7 @@ function waitForRetry(delay, signal) {
   })
 }
 
-async function consumeStream(body, onEvent, signal) {
+async function consumeStream(body, onEvent, signal, onEventId) {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -149,7 +153,10 @@ async function consumeStream(body, onEvent, signal) {
       buffer = frames.pop() || ''
       for (const frame of frames) {
         if (signal.aborted) return false
-        const data = frame.split(/\r?\n/)
+        const lines = frame.split(/\r?\n/)
+        const id = lines.find(line => line.startsWith('id:'))
+        if (id) onEventId?.(id.slice(3).trim())
+        const data = lines
           .filter(line => line.startsWith('data:'))
           .map(line => line.slice(5).trimStart())
           .join('\n')

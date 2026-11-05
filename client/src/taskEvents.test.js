@@ -69,3 +69,37 @@ test('a stopped pending request cannot report a late terminal HTTP error', async
   await flush()
   assert.deepEqual(errors, [])
 })
+
+test('reconnect sends Last-Event-ID from the last SSE id', async () => {
+  globalThis.localStorage = { getItem: () => 'token' }
+  const calls = []
+  let count = 0
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push(options.headers || {})
+    count += 1
+    const payload = count === 1
+      ? 'id: 5\ndata: {"state":"PROCESSING"}\n\n'
+      : 'id: 6\ndata: {"state":"COMPLETED","result":"done"}\n\n'
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload))
+        controller.close()
+      }
+    })
+    return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+  }
+  const streams = createTaskStreams()
+  const events = []
+  streams.start(1, 'ai', 'goal', '/events', event => events.push(event.state))
+
+  await new Promise(resolve => setTimeout(resolve, 1500))
+
+  assert.equal(calls.length, 2)
+  const secondHeaders = calls[1]
+  const lastEventId = typeof secondHeaders?.get === 'function'
+    ? secondHeaders.get('Last-Event-ID')
+    : secondHeaders?.['Last-Event-ID']
+  assert.equal(lastEventId, '5')
+  assert.deepEqual(events, ['PROCESSING', 'COMPLETED'])
+  streams.stopAll()
+})

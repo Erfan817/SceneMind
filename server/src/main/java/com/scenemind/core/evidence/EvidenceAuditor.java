@@ -103,9 +103,29 @@ public final class EvidenceAuditor {
     public boolean supportsClaim(EvidenceCorpus corpus, String claimText, EvidenceClaim evidence) {
         if (evidence == null || claimText == null) return false;
         String expected = normalize(claimText);
-        return !expected.isEmpty()
-                && expected.equals(normalize(evidence.claim()))
-                && supported(corpus, evidence);
+        String actual = normalize(evidence.claim());
+        if (expected.isEmpty() || actual.isEmpty()) return false;
+        // 模型把结论换个说法是常态：允许「包含」或高字符重叠，但仍要求证据本身通过严格校验。
+        boolean containment = (expected.length() >= 4 && actual.contains(expected))
+                || (actual.length() >= 4 && expected.contains(actual));
+        boolean claimMatches = expected.equals(actual)
+                || containment
+                || charJaccard(expected, actual) >= CLAIM_SIMILARITY_THRESHOLD;
+        return claimMatches && supported(corpus, evidence);
+    }
+
+    /** 结论与证据 claim 的字符级 Jaccard 阈值，用于容忍同义改写、避免 Critic 空转。 */
+    public static final double CLAIM_SIMILARITY_THRESHOLD = 0.75;
+
+    private static double charJaccard(String left, String right) {
+        Set<Character> leftChars = new LinkedHashSet<>();
+        for (char ch : left.toCharArray()) leftChars.add(ch);
+        Set<Character> rightChars = new LinkedHashSet<>();
+        for (char ch : right.toCharArray()) rightChars.add(ch);
+        if (leftChars.isEmpty() || rightChars.isEmpty()) return 0.0;
+        long intersection = leftChars.stream().filter(rightChars::contains).count();
+        long union = leftChars.size() + rightChars.size() - intersection;
+        return union == 0 ? 0.0 : (double) intersection / union;
     }
 
     /** 按声明来源拆出互不混用的通道文本。 */

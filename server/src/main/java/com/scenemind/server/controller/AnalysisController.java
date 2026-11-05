@@ -31,6 +31,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -204,7 +205,8 @@ public class AnalysisController {
             @RequestParam Long id,
             @RequestParam String goal,
             @RequestParam(required = false) String mode,
-            @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+            @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId,
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
         mediaService.requireOwnedMedia(id, userId);
         String normalizedGoal = normalizeText(goal, "分析目标");
         AnalysisMode analysisMode = AnalysisMode.fromRequest(mode);
@@ -214,7 +216,8 @@ public class AnalysisController {
                 normalizedGoal,
                 analysisMode,
                 () -> TaskEvent.of(statusService.current(id, normalizedGoal, analysisMode),
-                        statusService.stage(id, normalizedGoal, analysisMode)));
+                        statusService.stage(id, normalizedGoal, analysisMode)),
+                lastEventId);
     }
 
     @GetMapping("/agent-evaluation")
@@ -280,6 +283,8 @@ public class AnalysisController {
         return switch (result) {
             case ACCEPTED -> ResponseEntity.accepted().body(Result.ok());
             case RATE_LIMITED -> throw new BusinessException(ErrorCode.RATE_LIMITED, "系统繁忙，请稍后再试");
+            case DAILY_QUOTA_EXCEEDED -> throw new BusinessException(
+                    ErrorCode.RATE_LIMITED, "今日 AI 额度已用完，请明天再试或联系管理员");
             case DUPLICATE -> throw new BusinessException(ErrorCode.CONFLICT, "相同视频和分析目标正在处理中");
             case FAILED -> throw new BusinessException(ErrorCode.INTERNAL_ERROR, "任务提交失败");
         };

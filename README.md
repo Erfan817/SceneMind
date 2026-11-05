@@ -109,7 +109,7 @@
 > 量纲稳定性 = 把语义分数做 `37x + 5` 的单调变换（模拟向量服务打分尺度变化）后 TopK 集合的 Jaccard。RRF 只用名次，恒为 1.000；线性加权会因权重失衡漂移一半结果。
 > Recall 与覆盖率在这份数据集上持平——相关片段信号较强，改造解决的是**冗余与鲁棒性**，不是召回上限。要验证召回收益需要真实标注集，这是路线图里的下一步。
 
-测试：`server` 24 个测试类、74 个 `@Test` 用例，`bash ./mvnw test` 实测 0 失败；其中 `core` 纯函数层 5 个测试类 29 个用例，本轮证据回环与 trace 契约新增 4 个测试类（`EvidenceRetryPolicyTest`、`EvidenceAuditIntegrationTest`、`AgentTelemetryTest`、`RealAnnotationEvaluationTest`；真实标注集用例在未放数据时自动跳过）。`client` 的既有前端用例保持通过（`cd client && npm test`）；`extension` 的用例需先 `npm ci`；`mcp/` 的用例用 `node --test` 跑，不依赖后端。
+测试：`server` 25 个测试类、80 个 `@Test` 用例，`bash ./mvnw test` 实测 0 失败；其中 `core` 纯函数层 5 个测试类 31 个用例，本轮新增 5 个测试类（`EvidenceRetryPolicyTest`、`EvidenceAuditIntegrationTest`、`AgentTelemetryTest`、`RealAnnotationEvaluationTest`、`AuthServiceTest`；真实标注集用例在未放数据时自动跳过）。`client` 的既有前端用例保持通过（`cd client && npm test`）；`extension` 的用例需先 `npm ci`；`mcp/` 的用例用 `node --test` 跑，不依赖后端。
 
 ---
 

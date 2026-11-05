@@ -98,6 +98,8 @@ bash scripts/smoke-test.sh
 | 项 | 做法 |
 | --- | --- |
 | LLM / ASR 费用 | `.env` 里填真实单价并设置 `AGENT_MAX_ESTIMATED_COST`（建议 1–5 元/任务）；关闭公开注册，只给自己的账号用 |
+| 每日额度 | `DAILY_AI_REQUESTS`（默认 100，分析/追问/证据检索各计一次）；公网实例别设 0 |
+| 登录保护 | 用户名 8 次 / 10 分钟 + 来源 IP 30 次 / 10 分钟；反向代理需正确传 `X-Forwarded-For` |
 | 站点访问 | 保留 Caddy Basic Auth；或换成 Cloudflare Access 等 |
 | 端口 | 只暴露 80/443；MySQL / Redis / Qdrant / MinIO 控制台都不映射到公网 |
 | 密钥 | `.env` 不入库（已在 `.gitignore`）；不要提交到 GitHub |

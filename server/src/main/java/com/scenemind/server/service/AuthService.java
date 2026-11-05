@@ -35,7 +35,9 @@ public class AuthService {
     private static final long SESSION_HOURS = 24;
     private static final String SESSION_PREFIX = "auth:session:";
     private static final String LOGIN_FAILURE_PREFIX = "auth:login-failures:";
+    private static final String LOGIN_IP_FAILURE_PREFIX = "auth:login-ip-failures:";
     private static final int MAX_LOGIN_FAILURES = 8;
+    private static final int MAX_LOGIN_FAILURES_PER_IP = 30;
     private static final long LOGIN_FAILURE_WINDOW_MINUTES = 10;
     private static final int MAX_PASSWORD_LENGTH = 128;
     private static final int MAX_NICKNAME_LENGTH = 50;
@@ -96,11 +98,20 @@ public class AuthService {
     }
 
     public AuthResponse login(AuthRequest request) {
+        return login(request, null);
+    }
+
+    /**
+     * @param clientIp 客户端 IP（反向代理后取 X-Forwarded-For 首段）；为空时只按用户名限流。
+     *                 同时按「用户名」与「IP」两个维度计数：前者防撞库针对单账号，
+     *                 后者防同一来源轮换用户名爆破，也避免攻击者用错误密码把账号锁死。
+     */
+    public AuthResponse login(AuthRequest request, String clientIp) {
         String username = normalizeUsername(request.username());
         if (username == null || request.password() == null || request.password().isBlank()) {
             return response(400, "请输入账号和密码", null, null);
         }
-        if (!loginAttemptAllowed(username)) {
+        if (!loginAttemptAllowed(username, clientIp)) {
             return response(429, "登录尝试过于频繁，请稍后再试", null, null);
         }
 
@@ -108,7 +119,7 @@ public class AuthService {
         query.eq("username", username);
         User user = userMapper.selectOne(query);
         if (user == null || !passwordMatches(request.password(), user.getPassword())) {
-            recordLoginFailure(username);
+            recordLoginFailure(username, clientIp);
             return response(401, "账号或密码错误", null, null);
         }
 
@@ -184,18 +195,39 @@ public class AuthService {
     }
 
     public boolean loginAttemptAllowed(String username) {
-        String value = redisTemplate.opsForValue().get(LOGIN_FAILURE_PREFIX + username);
+        return loginAttemptAllowed(username, null);
+    }
+
+    public boolean loginAttemptAllowed(String username, String clientIp) {
+        boolean usernameAllowed = failureCountBelow(LOGIN_FAILURE_PREFIX + username, MAX_LOGIN_FAILURES);
+        if (!usernameAllowed) return false;
+        return clientIp == null || clientIp.isBlank()
+                || failureCountBelow(LOGIN_IP_FAILURE_PREFIX + clientIp, MAX_LOGIN_FAILURES_PER_IP);
+    }
+
+    private boolean failureCountBelow(String key, int maxFailures) {
+        String value = redisTemplate.opsForValue().get(key);
         if (value == null) return true;
         try {
-            return Long.parseLong(value) < MAX_LOGIN_FAILURES;
+            return Long.parseLong(value) < maxFailures;
         } catch (NumberFormatException e) {
-            redisTemplate.delete(LOGIN_FAILURE_PREFIX + username);
+            redisTemplate.delete(key);
             return true;
         }
     }
 
     public void recordLoginFailure(String username) {
-        String key = LOGIN_FAILURE_PREFIX + username;
+        recordLoginFailure(username, null);
+    }
+
+    public void recordLoginFailure(String username, String clientIp) {
+        incrementLoginFailure(LOGIN_FAILURE_PREFIX + username);
+        if (clientIp != null && !clientIp.isBlank()) {
+            incrementLoginFailure(LOGIN_IP_FAILURE_PREFIX + clientIp);
+        }
+    }
+
+    private void incrementLoginFailure(String key) {
         Long failures = redisTemplate.opsForValue().increment(key);
         if (failures != null && failures == 1) {
             redisTemplate.expire(key, LOGIN_FAILURE_WINDOW_MINUTES, TimeUnit.MINUTES);

@@ -156,6 +156,8 @@ public class VideoEvidenceRetrievalService {
     /** 把 RankingResult 的逐条依据转换成可 JSON 化的诊断对象。 */
     private Map<String, Object> retrievalDiagnostics(RankingResult ranked,
                                                       TopKPolicy.Decision decision) {
+        // trace 会写 Redis 并保留 7 天：只存前 N 条明细，避免长视频把 trace 撑爆。
+        int maxDiagnosticItems = 20;
         Map<String, Object> diagnostics = new LinkedHashMap<>();
         diagnostics.put("topK", hybridRanker.config().maxResults());
         diagnostics.put("dynamicTopK", decision.topK());
@@ -168,7 +170,9 @@ public class VideoEvidenceRetrievalService {
         diagnostics.put("channelsUsed", ranked.diagnostics().channelsUsed().stream()
                 .map(Enum::name).toList());
         diagnostics.put("notes", ranked.diagnostics().notes());
-        diagnostics.put("items", ranked.items().stream().map(item -> {
+        diagnostics.put("itemsTotal", ranked.items().size());
+        diagnostics.put("itemsTruncated", ranked.items().size() > maxDiagnosticItems);
+        diagnostics.put("items", ranked.items().stream().limit(maxDiagnosticItems).map(item -> {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", item.candidate().id());
             row.put("fusedScore", item.fusedScore());

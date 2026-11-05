@@ -7,6 +7,7 @@ import com.scenemind.server.dto.AuthRequest;
 import com.scenemind.server.dto.AuthResponse;
 import com.scenemind.server.exception.BusinessException;
 import com.scenemind.server.service.AuthService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -34,8 +35,9 @@ public class UserController {
 
     @PostMapping("/login")
     public Result<AuthData> login(
-            @Validated(AuthRequest.Login.class) @RequestBody AuthRequest request) {
-        return toResult(authService.login(request));
+            @Validated(AuthRequest.Login.class) @RequestBody AuthRequest request,
+            HttpServletRequest httpRequest) {
+        return toResult(authService.login(request, clientIp(httpRequest)));
     }
 
     @PostMapping("/logout")
@@ -53,6 +55,14 @@ public class UserController {
             throw new BusinessException(mapAuthCode(response.code()), response.msg());
         }
         return Result.ok(new AuthData(response.userInfo(), response.token()));
+    }
+
+    private static String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     private ErrorCode mapAuthCode(int code) {

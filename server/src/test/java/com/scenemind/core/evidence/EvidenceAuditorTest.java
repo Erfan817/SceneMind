@@ -90,6 +90,20 @@ class EvidenceAuditorTest {
     }
 
     @Test
+    void supportsParaphrasedClaimWithHighCharacterOverlap() {
+        EvidenceClaim evidence = new EvidenceClaim(125_000, "OCR",
+                "根节点、左子树、右子树", "前序遍历顺序");
+        assertTrue(auditor.supportsClaim(course(), "前序遍历的顺序", evidence));
+    }
+
+    @Test
+    void rejectsUnrelatedClaimEvenWhenEvidenceIsValid() {
+        EvidenceClaim evidence = new EvidenceClaim(125_000, "OCR",
+                "根节点、左子树、右子树", "前序遍历顺序");
+        assertFalse(auditor.supportsClaim(course(), "后序遍历的访问顺序", evidence));
+    }
+
+    @Test
     void keywordCoverageIsDedupedAndScaleFree() {
         assertEquals(1.0, EvidenceAuditor.keywordCoverage(
                 "前序遍历与灰度发布", List.of("前序遍历", "前序遍历", "灰度发布")));
