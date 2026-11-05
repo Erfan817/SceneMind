@@ -176,7 +176,11 @@ flowchart LR
 
 ### 0. 唯一零依赖路径：`?demo`
 
-不需要后端、数据库、Docker 或 API Key：
+**在线演示（无需安装任何东西）：<https://erfan817.github.io/SceneMind/?demo>**
+
+![在线演示：音画冲突警示条与带时间戳证据](docs/images/demo-live.png)
+
+不需要后端、数据库、Docker 或 API Key。想在本地跑同样的页面：
 
 ```bash
 cd client
