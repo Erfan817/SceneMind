@@ -24,7 +24,62 @@ export const DEMO_TRACE = {
 export const DEMO_EVALUATION = {
   structuredValid: true,
   evidenceSupportRate: 0.92,
-  criticPassed: true
+  criticPassed: true,
+  // 新增评估信号：冗余率/覆盖度为 0~1 数值，冲突标记为布尔。
+  evidenceRedundancyRate: 0.18,
+  temporalSpread: 0.76,
+  conflictFlagged: true
+}
+
+// 音画冲突：语音与画面在同一时间点给出不一致的发布日期。
+export const DEMO_CONFLICTS = [
+  {
+    startMs: 522000,
+    asrValue: '8月1日正式发布',
+    ocrValue: '上线时间：8月3日',
+    detail: '语音与课件对发布日期的表述不一致，建议以画面公告为准并复核。'
+  }
+]
+
+// 证据核验摘要（与 TaskStatus.evidenceAudit 同构）。
+export const DEMO_EVIDENCE_AUDIT = {
+  total: 11,
+  accepted: 8,
+  retryableRejections: 2,
+  hallucinationRejections: 1,
+  notes: [
+    '2 条证据缺少可核对时间戳，已退回重试',
+    '1 条 OCR 文本与画面不符，疑似幻觉已剔除'
+  ]
+}
+
+// 检索诊断（与 agent-trace 的 diagnostics 同构）：
+// retrieval 给前端渲染预算/命中明细，evidence 作为 evidenceAudit 的兜底来源。
+export const DEMO_DIAGNOSTICS = {
+  retrieval: {
+    topK: 8,
+    dynamicTopK: 6,
+    duplicatesSuppressed: 3,
+    windowsCovered: 5,
+    channelsUsed: ['ASR', 'OCR'],
+    notes: [
+      '跨通道融合后按 fusedScore 择优',
+      '相邻时间窗的重复片段已合并'
+    ],
+    items: [
+      { id: 'w04-asr-02', fusedScore: 0.91, selectionPass: 1, channelRanks: { ASR: 1, OCR: 2 }, matchedChannels: ['ASR', 'OCR'] },
+      { id: 'w04-ocr-01', fusedScore: 0.87, selectionPass: 1, channelRanks: { ASR: 3, OCR: 1 }, matchedChannels: ['OCR'] },
+      { id: 'w09-asr-01', fusedScore: 0.74, selectionPass: 2, channelRanks: { ASR: 2 }, matchedChannels: ['ASR'] }
+    ]
+  },
+  evidence: {
+    total: 11,
+    accepted: 8,
+    retryableRejections: 2,
+    hallucinationRejections: 1,
+    notes: ['证据审计与 TaskStatus.evidenceAudit 一致']
+  },
+  generatedAt: '2026-07-10T14:32:00'
 }
 
 export const DEMO_RESULT = `## 二叉树遍历课程分析

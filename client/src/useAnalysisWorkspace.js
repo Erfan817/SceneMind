@@ -1,6 +1,15 @@
 import { computed, ref } from 'vue'
 import { apiRequest, captureAuthSession } from './api.js'
-import { DEMO_EVALUATION, DEMO_ITEM, DEMO_PLAN, DEMO_RESULT, DEMO_TRACE } from './demoData.js'
+import {
+  DEMO_CONFLICTS,
+  DEMO_DIAGNOSTICS,
+  DEMO_EVALUATION,
+  DEMO_EVIDENCE_AUDIT,
+  DEMO_ITEM,
+  DEMO_PLAN,
+  DEMO_RESULT,
+  DEMO_TRACE
+} from './demoData.js'
 import { renderMarkdown } from './markdown.js'
 
 const DEFAULT_GOAL = '理解视频核心内容，提炼关键结论，并给出带时间戳的证据和可执行建议'
@@ -71,7 +80,12 @@ function createSidebarState() {
     feedbackLoading: false,
     editingPlan: false,
     planDraft: [],
-    rerunLoading: false
+    rerunLoading: false,
+    // 音画冲突显式标注 + 检索/证据诊断。旧后端或未分析完时这些字段可能缺失或为 null。
+    conflicts: [],
+    evidenceAudit: null,
+    diagnostics: null,
+    diagnosticsError: ''
   }
 }
 
@@ -95,9 +109,111 @@ export function useAnalysisWorkspace({
     const isCurrentSession = captureAuthSession()
     return () => version === workspaceVersion && isCurrentSession()
   }
+
+  // TaskStatus（analysis-status / SSE / 历史恢复）里的结构化字段在旧后端可能缺失或为 null，
+  // 统一做空值保护，避免抛错或把旧数据留在新面板上。
+  const storeStatusFields = status => {
+    sidebar.value.conflicts = Array.isArray(status?.conflicts) ? status.conflicts : []
+    const audit = status?.evidenceAudit
+    sidebar.value.evidenceAudit = audit && typeof audit === 'object' ? audit : null
+  }
+
+  // agent-trace 里也可能带 conflicts，与 TaskStatus 的列表合并并按内容去重，
+  // 这样两个来源无论先后、无论是否重复，都只保留一份。
+  const mergeConflicts = incoming => {
+    if (!Array.isArray(incoming) || !incoming.length) return
+    const current = Array.isArray(sidebar.value.conflicts) ? sidebar.value.conflicts : []
+    const seen = new Set(current.map(conflictKey))
+    const merged = current.slice()
+    for (const conflict of incoming) {
+      if (!conflict || typeof conflict !== 'object') continue
+      const key = conflictKey(conflict)
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(conflict)
+    }
+    sidebar.value.conflicts = merged
+  }
+
+  // demo 没有后端，直接把演示用的冲突/诊断数据灌进 sidebar。
+  const applyDemoMeta = () => {
+    sidebar.value.conflicts = DEMO_CONFLICTS.slice()
+    sidebar.value.evidenceAudit = DEMO_EVIDENCE_AUDIT
+    sidebar.value.diagnostics = DEMO_DIAGNOSTICS
+    sidebar.value.diagnosticsError = ''
+  }
+
   const traceStages = computed(() => Object.entries(sidebar.value.trace?.stageDurationMs || {})
     .map(([stage, duration]) => [STAGE_LABELS[stage] || stage, formatDuration(duration)]))
   const renderedMarkdown = computed(() => renderMarkdown(sidebar.value.content))
+
+  // 给模板用的格式化冲突列表：补上 mm:ss 时间戳，并对每个字段做空值保护。
+  const conflictNotices = computed(() => (Array.isArray(sidebar.value.conflicts) ? sidebar.value.conflicts : [])
+    .filter(conflict => conflict && typeof conflict === 'object')
+    .map(conflict => {
+      const startMs = asNumber(conflict.startMs) ?? 0
+      return {
+        startMs,
+        time: formatConflictTime(startMs),
+        asrValue: conflict.asrValue == null ? '' : String(conflict.asrValue),
+        ocrValue: conflict.ocrValue == null ? '' : String(conflict.ocrValue),
+        detail: conflict.detail == null ? '' : String(conflict.detail)
+      }
+    }))
+
+  // 检索诊断：从 diagnostics.retrieval 归一化出模板所需字段，整块缺失时返回 null。
+  const retrievalDiagnostics = computed(() => {
+    const diagnostics = sidebar.value.diagnostics
+    const retrieval = diagnostics && typeof diagnostics === 'object' ? diagnostics.retrieval : null
+    if (!retrieval || typeof retrieval !== 'object') return null
+    return {
+      topK: asNumber(retrieval.topK),
+      dynamicTopK: asNumber(retrieval.dynamicTopK),
+      duplicatesSuppressed: asNumber(retrieval.duplicatesSuppressed),
+      windowsCovered: asNumber(retrieval.windowsCovered),
+      channelsUsed: Array.isArray(retrieval.channelsUsed) ? retrieval.channelsUsed.map(String) : [],
+      notes: Array.isArray(retrieval.notes) ? retrieval.notes.map(String) : [],
+      generatedAt: diagnostics.generatedAt == null ? '' : String(diagnostics.generatedAt),
+      items: (Array.isArray(retrieval.items) ? retrieval.items : [])
+        .filter(item => item && typeof item === 'object')
+        .map(item => ({
+          id: item.id == null ? '' : String(item.id),
+          fusedScore: asNumber(item.fusedScore) ?? 0,
+          selectionPass: asNumber(item.selectionPass),
+          matchedChannels: Array.isArray(item.matchedChannels) ? item.matchedChannels.map(String) : [],
+          channelRanks: Object.entries(
+            item.channelRanks && typeof item.channelRanks === 'object' ? item.channelRanks : {}
+          ).map(([channel, rank]) => ({ channel: String(channel), rank: asNumber(rank) ?? 0 }))
+        }))
+    }
+  })
+
+  // 证据核验：优先用 TaskStatus.evidenceAudit，缺失时回退到 diagnostics.evidence。
+  const evidenceAuditSummary = computed(() => {
+    const diagnostics = sidebar.value.diagnostics
+    const source = sidebar.value.evidenceAudit
+      || (diagnostics && typeof diagnostics === 'object' ? diagnostics.evidence : null)
+    if (!source || typeof source !== 'object') return null
+    return {
+      total: asNumber(source.total),
+      accepted: asNumber(source.accepted),
+      retryableRejections: asNumber(source.retryableRejections),
+      hallucinationRejections: asNumber(source.hallucinationRejections),
+      notes: Array.isArray(source.notes) ? source.notes.map(String) : []
+    }
+  })
+
+  // 评估信号：两个比率做百分比格式化，冲突标记保留布尔；全为空时返回 null。
+  const evaluationSignals = computed(() => {
+    const evaluation = sidebar.value.evaluation
+    if (!evaluation || typeof evaluation !== 'object') return null
+    const signals = {
+      evidenceRedundancyRate: formatPercentSafe(evaluation.evidenceRedundancyRate),
+      temporalSpread: formatPercentSafe(evaluation.temporalSpread),
+      conflictFlagged: asFlag(evaluation.conflictFlagged)
+    }
+    return Object.values(signals).some(value => value !== null) ? signals : null
+  })
   const isCurrentWorkspace = (id, type, goal = null, analysisMode = null) => sidebar.value.mediaId === id
     && sidebar.value.type === type
     && (goal === null || sidebar.value.goal === goal)
@@ -115,6 +231,11 @@ export function useAnalysisWorkspace({
     sidebar.value.statusMessage = ''
     sidebar.value.streamOffline = false
     sidebar.value.streamRetry = 0
+    // 换面板时清掉上一次分析的冲突/诊断，避免旧视频的警示条串到新视图。
+    sidebar.value.conflicts = []
+    sidebar.value.evidenceAudit = null
+    sidebar.value.diagnostics = null
+    sidebar.value.diagnosticsError = ''
   }
 
   const closeSidebar = () => {
@@ -175,7 +296,19 @@ export function useAnalysisWorkspace({
     if (!isCurrent() || version !== metadataRequestVersion
       || !isCurrentWorkspace(id, 'ai', goal, analysisMode)) return
     if (plan && !sidebar.value.editingPlan) sidebar.value.plan = plan
-    if (trace) sidebar.value.trace = trace
+    if (trace) {
+      sidebar.value.trace = trace
+      // diagnostics 在旧后端/未分析完时可能为 null；带 conflicts 时合并去重。
+      sidebar.value.diagnostics = trace.diagnostics && typeof trace.diagnostics === 'object'
+        ? trace.diagnostics : null
+      sidebar.value.diagnosticsError = ''
+      mergeConflicts(trace.conflicts)
+    } else {
+      sidebar.value.diagnostics = null
+      // 只有 trace 请求本身被拒绝才算“加载失败”，404/无诊断走「暂无检索诊断」。
+      sidebar.value.diagnosticsError = settled[1]?.status === 'rejected'
+        ? '检索诊断加载失败，请稍后重试' : ''
+    }
     if (includeEvaluation && evaluation) sidebar.value.evaluation = evaluation
   }
 
@@ -187,7 +320,7 @@ export function useAnalysisWorkspace({
       id, type, type === 'ai' ? goal : null, type === 'ai' ? resolvedMode : null)
       && (type !== 'ai' || sidebar.value.mode === 'result')
     const taskLabel = type === 'ai' ? 'AI 分析' : '文字提取'
-    const finish = async (result, failed = false, signal) => {
+    const finish = async (result, failed = false, signal, status = null) => {
       if (!isCurrentSession() || signal?.aborted) return
       const watching = sidebar.value.visible && isCurrentTask()
       if (watching) {
@@ -198,7 +331,11 @@ export function useAnalysisWorkspace({
         sidebar.value.streamRetry = 0
         sidebar.value.error = failed ? result : ''
         if (failed && type === 'ai') sidebar.value.mode = 'compose'
-        if (type === 'ai' && !failed) await refreshAgentMeta(id, goal, true, resolvedMode)
+        if (type === 'ai' && !failed) {
+          // 先落 TaskStatus 的结构化字段，再刷新 trace（后者会合并诊断/冲突），顺序不能反。
+          storeStatusFields(status)
+          await refreshAgentMeta(id, goal, true, resolvedMode)
+        }
       }
       if (!isCurrentSession() || signal?.aborted) return
       // 用户可能已经关掉面板去看别的视频，带上文件名才知道是哪个任务结束了。
@@ -237,9 +374,9 @@ export function useAnalysisWorkspace({
       if (!isCurrentSession() || signal?.aborted) return
       if (status.state === 'COMPLETED') {
         await refreshMediaList()
-        await finish(status.result || (type === 'ai' ? '分析完成' : ''), false, signal)
+        await finish(status.result || (type === 'ai' ? '分析完成' : ''), false, signal, status)
       } else if (status.state === 'FAILED') {
-        await finish(status.message || '任务执行失败', true, signal)
+        await finish(status.message || '任务执行失败', true, signal, status)
       }
     }, (error, attempt, terminal = false) => {
       // isCurrentTask 保证用户已切换视频或关闭面板时，旧任务的错误不会写到新页面上。
@@ -287,6 +424,8 @@ export function useAnalysisWorkspace({
       if (!current.ok) throw new Error(await current.text())
       const currentStatus = await current.json()
       if (!isCurrentSession()) return
+      // 文字提取状态一般不带这些 AI 字段；用同一套空值保护读取，缺失即置空。
+      storeStatusFields(currentStatus)
       if (currentStatus.state === 'COMPLETED') {
         if (isCurrent() && isCurrentWorkspace(id, 'text')) {
           sidebar.value.content = currentStatus.result || ''
@@ -382,7 +521,10 @@ export function useAnalysisWorkspace({
       goal,
       analysisMode
     }
-    if (demoMode) return
+    if (demoMode) {
+      applyDemoMeta()
+      return
+    }
 
     loadPlayback(item.id)
     try {
@@ -397,6 +539,8 @@ export function useAnalysisWorkspace({
         || sidebar.value.goal !== goal
         || sidebar.value.analysisMode !== analysisMode) return
 
+      // 历史恢复的 TaskStatus 同样带 conflicts/evidenceAudit，缺失时置空。
+      storeStatusFields(status)
       if (status.state === 'COMPLETED') {
         sidebar.value.mode = 'result'
         sidebar.value.content = status.result || ''
@@ -428,6 +572,7 @@ export function useAnalysisWorkspace({
     if (!sidebar.value.plan) sidebar.value.plan = DEMO_PLAN
     sidebar.value.trace = DEMO_TRACE
     sidebar.value.evaluation = DEMO_EVALUATION
+    applyDemoMeta()
   }
 
   // AUTO 模式的意图路由:仅凭目标文本让后端 AI 判定出具体模式。apiRequest 已解包信封,
@@ -457,13 +602,16 @@ export function useAnalysisWorkspace({
     Object.assign(sidebar.value, {
       plan: null, trace: null, evaluation: null, feedback: null,
       followUp: '', followUpLoading: false, feedbackLoading: false,
-      editingPlan: false, planDraft: [], rerunLoading: false
+      editingPlan: false, planDraft: [], rerunLoading: false,
+      // 新一次分析必须以干净的冲突/诊断状态开始。
+      conflicts: [], evidenceAudit: null, diagnostics: null, diagnosticsError: ''
     })
     if (demoMode) {
       sidebar.value.mode = 'result'
       sidebar.value.loading = true
       sidebar.value.plan = DEMO_PLAN
       sidebar.value.trace = DEMO_TRACE
+      applyDemoMeta()
       setTimeout(() => { if (isCurrent()) showDemoResult() }, 450)
       return
     }
@@ -745,6 +893,10 @@ export function useAnalysisWorkspace({
     analysisModes: ANALYSIS_MODES,
     traceStages,
     renderedMarkdown,
+    conflictNotices,
+    retrievalDiagnostics,
+    evidenceAuditSummary,
+    evaluationSignals,
     transcribe,
     closeSidebar,
     openAgent,
@@ -783,6 +935,37 @@ function modeTitle(value) {
 
 function analysisScope(goal, mode) {
   return `${mode || 'GENERAL'}:${goal}`
+}
+
+// 缺失/空字符串返回 null，其余转成有限数值；用于百分比格式化与统计字段的空值保护。
+function asNumber(value) {
+  if (value === null || value === undefined || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+// 与 formatPercent 同类的百分比工具，但空值时返回 null（而不是 "0%"），方便模板做 v-if。
+function formatPercentSafe(value) {
+  const number = asNumber(value)
+  return number === null ? null : `${Math.round(number * 100)}%`
+}
+
+function asFlag(value) {
+  if (value === null || value === undefined || value === '') return null
+  return Boolean(value)
+}
+
+// 冲突时间戳统一格式化为 mm:ss（分钟可为两位数以上）。
+function formatConflictTime(milliseconds) {
+  const seconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000))
+  const minutes = Math.floor(seconds / 60)
+  return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+// 用内容生成冲突的稳定键，供 TaskStatus 与 trace 两处来源合并去重。
+function conflictKey(conflict) {
+  return [conflict?.startMs, conflict?.asrValue, conflict?.ocrValue, conflict?.detail]
+    .map(value => String(value ?? '')).join('\u0000')
 }
 
 function formatDuration(value) {

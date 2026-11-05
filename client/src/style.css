@@ -19,7 +19,93 @@ textarea {
 
 button:focus-visible,
 input:focus-visible,
-textarea:focus-visible {
+textarea:focus-visible,
+/* 组件样式里用 outline:none 去掉了默认焦点框，这里用更高优先级把键盘焦点补回来。 */
+.url-input-box input:focus-visible,
+.library-search input:focus-visible,
+.agent-composer textarea:focus-visible,
+.follow-up-box textarea:focus-visible,
+.evidence-search-form input:focus-visible,
+.input-group input:focus-visible {
   outline: 2px solid #c5f946;
   outline-offset: 2px;
+}
+
+/* ==== 音画冲突警示条 & 检索/证据诊断 ====
+   复用 App.vue :root 的配色变量；fallback 让本文件独立加载时也有合理颜色。
+   冲突用温和的琥珀色（醒目但不刺眼），与 lime / purple 主色区分开。 */
+.conflict-alert {
+  margin: 0 0 20px;
+  padding: 14px 16px;
+  border: 1px solid rgba(227, 179, 65, 0.45);
+  border-left: 3px solid #e3b341;
+  border-radius: 6px;
+  background: rgba(227, 179, 65, 0.08);
+  color: var(--text-main, #e0e0e0);
+}
+.conflict-alert-title {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 10px; font-weight: 700; color: #e3b341;
+}
+.conflict-alert-title span[aria-hidden] { font-size: 1.05rem; }
+.conflict-alert-list { list-style: none; display: grid; gap: 8px; }
+.conflict-alert-item { font-size: 0.85rem; line-height: 1.7; }
+.conflict-time {
+  color: var(--accent-lime, #c5f946);
+  font-family: monospace; font-weight: 700;
+}
+.conflict-sep { color: var(--text-sub, #71757a); }
+.conflict-alert-item b { color: #e3b341; font-weight: 700; }
+.conflict-detail { color: var(--text-sub, #71757a); }
+
+/* 诊断三块复用 .agent-meta-block 容器，这里只补内部排版。 */
+.diagnostics-stats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.diagnostics-stats span {
+  border: 1px solid var(--border-tech, #2a2d35); border-radius: 4px;
+  padding: 6px 8px; color: var(--text-sub, #71757a); font-size: 0.78rem;
+}
+.diagnostics-notes {
+  padding-left: 18px; color: var(--text-main, #e0e0e0);
+  font-size: 0.82rem; line-height: 1.7;
+}
+.diagnostics-notes li { margin: 4px 0; }
+.diagnostics-items { margin-top: 10px; }
+.diagnostics-items summary {
+  color: var(--text-sub, #71757a); cursor: pointer; font-size: 0.82rem; padding: 6px 0;
+}
+.diagnostics-items summary:hover { color: var(--accent-lime, #c5f946); }
+.diagnostics-table-wrap { overflow-x: auto; margin-top: 8px; }
+.diagnostics-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.diagnostics-table th,
+.diagnostics-table td {
+  border: 1px solid var(--border-tech, #2a2d35);
+  padding: 6px 8px; text-align: left; white-space: nowrap;
+  color: var(--text-sub, #71757a);
+}
+.diagnostics-table th {
+  color: var(--accent-lime, #c5f946);
+  background: rgba(197, 249, 70, 0.05); font-weight: 700;
+}
+.diagnostics-table td:first-child {
+  color: var(--text-main, #e0e0e0); font-family: monospace;
+}
+.channel-rank {
+  display: inline-block; margin: 0 6px 4px 0; padding: 2px 6px;
+  border: 1px solid var(--border-tech, #2a2d35); border-radius: 3px;
+  color: var(--accent-purple, #8a2be2); font-family: monospace;
+}
+.diagnostics-generated {
+  margin-top: 8px; color: var(--text-sub, #71757a);
+  font-size: 0.72rem; font-family: monospace;
+}
+.diagnostics-empty { color: var(--text-sub, #71757a); font-size: 0.82rem; padding: 6px 0; }
+.diagnostics-error { display: block; margin-top: 4px; color: #ff9aa4; }
+
+.conflict-list { list-style: none; display: grid; gap: 8px; font-size: 0.82rem; line-height: 1.7; }
+.conflict-list li { color: var(--text-main, #e0e0e0); }
+.agent-meta-block.conflict-block { border-left-color: #e3b341; }
+
+@media (max-width: 720px) {
+  .conflict-alert { padding: 12px; }
+  .diagnostics-table { font-size: 0.72rem; }
 }

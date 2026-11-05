@@ -139,3 +139,51 @@ test('a late follow-up from the previous plan cannot append to a revision of the
   assert.equal(workspace.sidebar.value.followUpLoading, false)
   assert.equal(workspace.sidebar.value.rerunLoading, false)
 })
+
+test('status conflicts and trace diagnostics are stored for the debug panel', async () => {
+  globalThis.fetch = async url => {
+    if (url.startsWith('/analysis/analysis-status')) {
+      return json({
+        state: 'COMPLETED',
+        result: '> **音画冲突提示：** 检测到 1 处语音与画面信息不一致',
+        conflicts: [{ startMs: 60000, asrValue: '8月1日', ocrValue: '8月3日', detail: '冲突' }],
+        evidenceAudit: {
+          total: 1,
+          accepted: 0,
+          retryableRejections: 0,
+          hallucinationRejections: 1,
+          notes: ['疑似幻觉']
+        }
+      })
+    }
+    if (url.startsWith('/analysis/agent-plan')) return json({ understoodGoal: '核验上线日期', tasks: ['核对日期'] })
+    if (url.startsWith('/analysis/agent-trace')) {
+      return json({
+        diagnostics: {
+          retrieval: {
+            topK: 8,
+            dynamicTopK: 8,
+            duplicatesSuppressed: 1,
+            windowsCovered: 3,
+            channelsUsed: ['SEMANTIC'],
+            notes: ['覆盖 3 个时间窗'],
+            items: []
+          }
+        }
+      })
+    }
+    if (url.startsWith('/analysis/agent-evaluation')) return json({ structuredValid: true })
+    if (url.startsWith('/media/playback')) return json('https://example.com/video.mp4')
+    return json(null)
+  }
+  const workspace = setup()
+  await workspace.openAgent(item)
+
+  assert.equal(workspace.sidebar.value.conflicts.length, 1)
+  assert.equal(workspace.sidebar.value.conflicts[0].asrValue, '8月1日')
+  assert.equal(workspace.sidebar.value.evidenceAudit.hallucinationRejections, 1)
+  assert.equal(workspace.sidebar.value.diagnostics.retrieval.topK, 8)
+  assert.equal(workspace.conflictNotices.value.length, 1)
+  assert.equal(workspace.retrievalDiagnostics.value.topK, 8)
+})
+

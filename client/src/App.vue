@@ -379,8 +379,25 @@
                   </button>
                 </div>
               </div>
-              <div class="markdown-content" v-html="renderedMarkdown" @click="seekEvidence"></div>
-              <details v-if="sidebar.plan?.tasks?.length || traceStages.length" class="agent-inspector">
+              <div v-if="conflictNotices.length" class="conflict-alert" role="alert">
+                 <div class="conflict-alert-title">
+                   <span aria-hidden="true">⚠</span>
+                   <span>音画冲突提示 · {{ conflictNotices.length }} 处</span>
+                 </div>
+                 <ul class="conflict-alert-list">
+                   <li v-for="(notice, index) in conflictNotices" :key="index" class="conflict-alert-item">
+                     <span class="conflict-time">{{ notice.time }}</span>
+                     <span class="conflict-sep"> · </span>
+                     <span>语音 <b>{{ notice.asrValue }}</b></span>
+                     <span class="conflict-sep"> / </span>
+                     <span>画面 <b>{{ notice.ocrValue }}</b></span>
+                     <span class="conflict-sep"> · </span>
+                     <span class="conflict-detail">{{ notice.detail }}</span>
+                   </li>
+                 </ul>
+               </div>
+               <div class="markdown-content" v-html="renderedMarkdown" @click="seekEvidence"></div>
+              <details v-if="sidebar.plan?.tasks?.length || traceStages.length || (sidebar.evaluation && Object.keys(sidebar.evaluation).length) || retrievalDiagnostics || evidenceAuditSummary || conflictNotices.length || evaluationSignals" class="agent-inspector">
                 <summary>分析详情</summary>
                 <div class="agent-inspector-content">
                 <div v-if="sidebar.plan?.tasks?.length" class="agent-meta-block">
@@ -411,6 +428,70 @@
                   <span>结构完整 {{ sidebar.evaluation.structuredValid ? '通过' : '待完善' }}</span>
                   <span>证据支持 {{ formatPercent(sidebar.evaluation.evidenceSupportRate) }}</span>
                   <span>Critic {{ sidebar.evaluation.criticPassed ? '通过' : '达到轮次上限' }}</span>
+                  <span v-if="evaluationSignals && evaluationSignals.evidenceRedundancyRate != null">证据冗余率 {{ evaluationSignals.evidenceRedundancyRate }}</span>
+                  <span v-if="evaluationSignals && evaluationSignals.temporalSpread != null">时间覆盖度 {{ evaluationSignals.temporalSpread }}</span>
+                  <span v-if="evaluationSignals && evaluationSignals.conflictFlagged != null">冲突标记 {{ evaluationSignals.conflictFlagged ? '是' : '否' }}</span>
+                </div>
+                <div v-if="retrievalDiagnostics" class="agent-meta-block diagnostics-block">
+                  <span class="meta-label">检索诊断</span>
+                  <div class="diagnostics-stats">
+                    <span>预算 topK {{ retrievalDiagnostics.topK ?? '—' }}</span>
+                    <span>动态预算 {{ retrievalDiagnostics.dynamicTopK ?? '—' }}</span>
+                    <span>抑制重复 {{ retrievalDiagnostics.duplicatesSuppressed ?? '—' }}</span>
+                    <span>覆盖窗 {{ retrievalDiagnostics.windowsCovered ?? '—' }}</span>
+                    <span>命中通道 {{ retrievalDiagnostics.channelsUsed.length ? retrievalDiagnostics.channelsUsed.join(' / ') : '—' }}</span>
+                  </div>
+                  <ul v-if="retrievalDiagnostics.notes.length" class="diagnostics-notes">
+                    <li v-for="(note, i) in retrievalDiagnostics.notes" :key="i">{{ note }}</li>
+                  </ul>
+                  <details v-if="retrievalDiagnostics.items.length" class="diagnostics-items">
+                    <summary>命中证据明细（{{ retrievalDiagnostics.items.length }}）</summary>
+                    <div class="diagnostics-table-wrap">
+                      <table class="diagnostics-table">
+                        <thead>
+                          <tr><th>证据 ID</th><th>融合分</th><th>选中轮次</th><th>各通道名次</th></tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="(item, index) in retrievalDiagnostics.items" :key="item.id || index">
+                            <td>{{ item.id }}</td>
+                            <td>{{ item.fusedScore.toFixed(3) }}</td>
+                            <td>{{ item.selectionPass ?? '—' }}</td>
+                            <td>
+                              <template v-if="item.channelRanks.length">
+                                <span v-for="rank in item.channelRanks" :key="rank.channel" class="channel-rank">{{ rank.channel }} #{{ rank.rank }}</span>
+                              </template>
+                              <span v-else>—</span>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                  <p v-if="retrievalDiagnostics.generatedAt" class="diagnostics-generated">生成于 {{ retrievalDiagnostics.generatedAt }}</p>
+                </div>
+                <div v-else class="diagnostics-empty">
+                  暂无检索诊断（需完成一次分析）
+                  <span v-if="sidebar.diagnosticsError" class="diagnostics-error">{{ sidebar.diagnosticsError }}</span>
+                </div>
+                <div v-if="evidenceAuditSummary" class="agent-meta-block audit-block">
+                  <span class="meta-label">证据核验</span>
+                  <div class="diagnostics-stats">
+                    <span>采纳 {{ evidenceAuditSummary.accepted ?? '—' }} / {{ evidenceAuditSummary.total ?? '—' }}</span>
+                    <span>可重试驳回 {{ evidenceAuditSummary.retryableRejections ?? '—' }}</span>
+                    <span>疑似幻觉 {{ evidenceAuditSummary.hallucinationRejections ?? '—' }}</span>
+                  </div>
+                  <ul v-if="evidenceAuditSummary.notes.length" class="diagnostics-notes">
+                    <li v-for="(note, i) in evidenceAuditSummary.notes" :key="i">{{ note }}</li>
+                  </ul>
+                </div>
+                <div v-if="conflictNotices.length" class="agent-meta-block conflict-block">
+                  <span class="meta-label">音画冲突（{{ conflictNotices.length }}）</span>
+                  <ul class="conflict-list">
+                    <li v-for="(notice, index) in conflictNotices" :key="index">
+                      <span class="conflict-time">{{ notice.time }}</span>
+                      语音 {{ notice.asrValue }} / 画面 {{ notice.ocrValue }} · {{ notice.detail }}
+                    </li>
+                  </ul>
                 </div>
                 </div>
               </details>
@@ -943,6 +1024,10 @@ const {
   analysisModes,
   traceStages,
   renderedMarkdown,
+  conflictNotices,
+  retrievalDiagnostics,
+  evidenceAuditSummary,
+  evaluationSignals,
   transcribe,
   closeSidebar,
   openAgent,
@@ -983,6 +1068,12 @@ const scrollToLatestAnswer = async () => {
 
 const seekVideo = seconds => {
   if (!Number.isFinite(seconds)) return
+  // 演示模式没有真实原片，点击 [mm:ss] 时给出非 error 的友好提示，
+  // 不弹红色错误，让「结论可定位到原始时间戳」这一卖点在 demo 里也能演示出来。
+  if (DEMO_MODE && !videoPlayer.value) {
+    showMsg(`演示模式：接入真实视频后可跳转到 ${formatEvidenceTime(seconds * 1000)}`)
+    return
+  }
   const player = videoPlayer.value
   if (!player) {
     if (sidebar.value.playbackError) {
@@ -1512,6 +1603,17 @@ html, body, #app {
 .url-input-box input {
   background: transparent; border: none; outline: none; color: var(--text-main);
   font-family: monospace; padding: 8px 5px; width: 180px; font-size: 0.9rem;
+}
+/* 可访问性：为关掉默认 outline 的控件用更高优先级的 :focus-visible 补回键盘焦点框，
+   胜过后面各组件规则里的 outline:none（0,2,1 > 0,1,1）。 */
+.url-input-box input:focus-visible,
+.library-search input:focus-visible,
+.agent-composer textarea:focus-visible,
+.follow-up-box textarea:focus-visible,
+.evidence-search-form input:focus-visible,
+.input-group input:focus-visible {
+  outline: 2px solid var(--accent-lime);
+  outline-offset: 2px;
 }
 .url-go-btn {
   background: transparent; border: none; color: var(--accent-lime); cursor: pointer;
