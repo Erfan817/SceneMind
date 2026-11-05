@@ -3,6 +3,7 @@ package com.scenemind.server.service;
 import com.scenemind.server.dto.AgentState;
 import com.scenemind.server.dto.AnalysisMode;
 import com.scenemind.server.dto.AnalysisResult;
+import com.scenemind.server.dto.EvidenceAuditReport;
 import com.scenemind.server.dto.TaskStatus;
 import com.scenemind.server.dto.TaskStage;
 import com.scenemind.server.dto.VideoContext;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 
 /** 受控 Agent 编排器：恢复状态、执行一轮分析、校验证据，再决定结束还是补跑。 */
@@ -230,6 +232,9 @@ public class AgentLoopService {
             } else if (round >= maxRounds) {
                 message = "Critic 达到最大校验轮次，正在保留警告并生成结果";
                 stage = TaskStage.ANALYSIS_COMPLETED_WITH_WARNINGS;
+            } else if (isRewriteOnlyRetry()) {
+                message = "Critic 判定疑似幻觉，不再补检索，按反馈重写";
+                stage = TaskStage.CRITIC_RETRY_REQUIRED;
             } else if (requiresEvidenceRefresh(critique)) {
                 message = "Critic 发现证据缺口，正在定向补充证据";
                 stage = TaskStage.CRITIC_RETRY_REQUIRED;
@@ -291,6 +296,20 @@ public class AgentLoopService {
                                                            AnalysisResult result,
                                                            AgentState.CriticResult critique) {
         critique = normalizeCritique(critique);
+        // 结构化证据核验：把 core.evidence 的拒绝原因、音画冲突与重试策略写进运行时 trace，
+        // 让 Critic 按原因分流，而不是所有失败都无差别重跑一轮检索。
+        EvidenceAuditReport report = evidenceVerificationService.auditResult(context, result);
+        EvidenceRetryPolicy.Decision retry = EvidenceRetryPolicy.decide(report);
+        telemetry.sectionCurrent("evidence", report.toMap());
+        telemetry.sectionCurrent("retry", EvidenceRetryPolicy.toMap(retry));
+        telemetry.conflictsCurrent(report.conflictMaps());
+        telemetry.incrementCurrent("evidenceRetryable", report.retryableRejections());
+        telemetry.incrementCurrent("evidenceHallucination", report.hallucinationRejections());
+        if (!report.notes().isEmpty()) {
+            log.debug("evidence_audit total={} accepted={} retryable={} hallucination={} notes={}",
+                    report.total(), report.accepted(), report.retryableRejections(),
+                    report.hallucinationRejections(), report.notes());
+        }
         boolean hasDeclaredProblems = !critique.feedback().isEmpty()
                 || !critique.missingRequirements().isEmpty()
                 || !critique.unsupportedClaims().isEmpty()
@@ -314,27 +333,30 @@ public class AgentLoopService {
                     List.of(), List.of(), List.of());
         }
         if (result == null || result.evidence() == null || result.evidence().isEmpty()) return critique;
-        List<AnalysisResult.Evidence> invalidEvidence = result.evidence().stream()
-                .filter(evidence -> !evidenceVerificationService.supported(context, evidence))
+        List<EvidenceAuditReport.EvidenceFinding> rejected = report.findings().stream()
+                .filter(finding -> !finding.accepted())
                 .toList();
         List<String> unsupportedClaims = result.conclusions().stream()
                 .filter(claim -> result.evidence().stream().noneMatch(
                         evidence -> evidenceVerificationService.supportsClaim(context, claim, evidence)))
                 .toList();
-        if (invalidEvidence.isEmpty() && unsupportedClaims.isEmpty()) return critique;
+        if (rejected.isEmpty() && unsupportedClaims.isEmpty()) return critique;
 
         List<String> unsupported = new ArrayList<>(critique.unsupportedClaims());
         unsupportedClaims.stream()
                 .filter(claim -> !unsupported.contains(claim))
                 .forEach(unsupported::add);
-        invalidEvidence.stream()
-                .map(evidence -> "证据无法在原始 ASR/OCR 中核验: " + evidence.timestampMs())
+        rejected.stream()
+                .map(finding -> "证据无法核验 [" + finding.reason() + "] @"
+                        + finding.timestampMs() + "ms"
+                        + (finding.retryable() ? "（定向补检索）" : "（疑似幻觉）"))
                 .forEach(unsupported::add);
         List<String> feedback = new ArrayList<>(critique.feedback());
+        feedback.addAll(retry.feedback());
         feedback.add("为每条结论重新检索并绑定可核验的时间戳证据");
+        // 只有 retryable 的拒绝会进入补检索名单；伪造来源 / 跨通道拼接直接判幻觉，不再烧一轮检索。
         List<Long> requiredTimestamps = new ArrayList<>(critique.requiredTimestamps());
-        invalidEvidence.stream()
-                .map(AnalysisResult.Evidence::timestampMs)
+        retry.retryTimestamps().stream()
                 .filter(timestamp -> !requiredTimestamps.contains(timestamp))
                 .forEach(requiredTimestamps::add);
         return new AgentState.CriticResult(
@@ -377,6 +399,11 @@ public class AgentLoopService {
                                          VideoContext selectedContext,
                                          AgentState.CriticResult critique,
                                          ModeProfile profile) {
+        if (isRewriteOnlyRetry()) {
+            // 伪造来源 / 跨通道拼接属于模型幻觉，补检索不会修好它，直接重写省一轮检索开销。
+            telemetry.incrementCurrent("criticHallucinationSkips", 1);
+            return selectedContext;
+        }
         if (!requiresEvidenceRefresh(critique)) {
             telemetry.incrementCurrent("criticRewriteOnlyRetries", 1);
             return selectedContext;
@@ -394,6 +421,13 @@ public class AgentLoopService {
                 && (!safeList(critique.requiredTimestamps()).isEmpty()
                 || !safeList(critique.missingRequirements()).isEmpty()
                 || !safeList(critique.unsupportedClaims()).isEmpty());
+    }
+
+    /** 读取本轮 trace 里由 EvidenceRetryPolicy 写入的策略决策。 */
+    private boolean isRewriteOnlyRetry() {
+        Object section = telemetry.currentSection("retry");
+        return section instanceof Map<?, ?> map
+                && EvidenceRetryPolicy.Action.REWRITE_ONLY.name().equals(map.get("action"));
     }
 
     private AgentState.AgentPlan revisePlanForRetry(Long mediaId,

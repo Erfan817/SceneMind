@@ -3,11 +3,14 @@ package com.scenemind.server.consumer;
 import com.scenemind.server.dto.AnalysisMode;
 import com.scenemind.server.dto.AnalysisTaskMsg;
 import com.scenemind.server.dto.AgentState;
+import com.scenemind.server.dto.EvidenceAuditReport;
 import com.scenemind.server.dto.TaskStatus;
 import com.scenemind.server.dto.TaskStage;
+import com.scenemind.server.dto.VideoContext;
 import com.scenemind.server.service.AiService;
 import com.scenemind.server.service.AgentCheckpointService;
 import com.scenemind.server.service.AgentLoopService;
+import com.scenemind.server.service.EvidenceVerificationService;
 import com.scenemind.server.service.FailedAnalysisTaskService;
 import com.scenemind.server.service.MediaService;
 import com.scenemind.server.service.TaskEventService;
@@ -19,11 +22,13 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.NoSuchElementException;
 
 @Component
@@ -56,8 +61,10 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
     private final FailedAnalysisTaskService failedTaskService;
     private final MediaService mediaService;
     private final TaskEventService taskEventService;
+    private final EvidenceVerificationService evidenceVerificationService;
     private final String deadLetterTopic;
 
+    /** 兼容既有单测的九参构造器。 */
     public VideoAnalysisConsumer(AiService aiService,
                                  RedissonClient redissonClient,
                                  StringRedisTemplate redisTemplate,
@@ -68,6 +75,23 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
                                  TaskEventService taskEventService,
                                  @Value("${rocketmq.topic.video-analysis-dead:video-analysis-dead-topic}")
                                  String deadLetterTopic) {
+        this(aiService, redissonClient, redisTemplate, checkpointService, rocketMQTemplate,
+                failedTaskService, mediaService, taskEventService,
+                new EvidenceVerificationService(), deadLetterTopic);
+    }
+
+    @Autowired
+    public VideoAnalysisConsumer(AiService aiService,
+                                 RedissonClient redissonClient,
+                                 StringRedisTemplate redisTemplate,
+                                 AgentCheckpointService checkpointService,
+                                 RocketMQTemplate rocketMQTemplate,
+                                 FailedAnalysisTaskService failedTaskService,
+                                 MediaService mediaService,
+                                 TaskEventService taskEventService,
+                                 EvidenceVerificationService evidenceVerificationService,
+                                 @Value("${rocketmq.topic.video-analysis-dead:video-analysis-dead-topic}")
+                                 String deadLetterTopic) {
         this.aiService = aiService;
         this.redissonClient = redissonClient;
         this.redisTemplate = redisTemplate;
@@ -76,6 +100,7 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
         this.failedTaskService = failedTaskService;
         this.mediaService = mediaService;
         this.taskEventService = taskEventService;
+        this.evidenceVerificationService = evidenceVerificationService;
         this.deadLetterTopic = deadLetterTopic;
     }
 
@@ -134,7 +159,7 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
                     AgentState completed = checkpointService.loadResult(mediaId, msg.getUserGoal(), mode);
                     if (completed != null && completed.result() != null) {
                         taskEventService.publishAnalysis(mediaId, msg.getUserGoal(), mode,
-                                TaskStatus.completed(completed), TaskStage.COMPLETED);
+                                completionWithConflicts(completed, mediaId), TaskStage.COMPLETED);
                         return;
                     }
                     throw new IllegalStateException("修订任务状态不存在，等待消息队列重试");
@@ -149,7 +174,9 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
                     if (reusable != null && reusable.result() != null
                             && aiService.reuseResult(mediaId, sourceMediaId, reusable, mode)) {
                         taskEventService.publishAnalysis(mediaId, msg.getUserGoal(), mode,
-                                TaskStatus.completed(reusable), TaskStage.COMPLETED_REUSED);
+                                completionWithConflicts(reusable,
+                                        sourceMediaId == null ? mediaId : sourceMediaId),
+                                TaskStage.COMPLETED_REUSED);
                         log.info("video_analysis_reused mediaId={} sourceMediaId={}", mediaId, sourceMediaId);
                         return;
                     }
@@ -171,7 +198,7 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
             AgentState completed = checkpointService.loadResult(mediaId, msg.getUserGoal(), mode);
             if (completed != null && completed.result() != null) {
                 taskEventService.publishAnalysis(mediaId, msg.getUserGoal(), mode,
-                        TaskStatus.completed(completed), TaskStage.COMPLETED);
+                        completionWithConflicts(completed, mediaId), TaskStage.COMPLETED);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -179,6 +206,13 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
             throw new IllegalStateException("等待共享分析结果时被中断，交由消息队列重试", e);
         } catch (AgentLoopService.BudgetExceededException e) {
             saveStage(mediaId, msg.getUserGoal(), mode, TaskStage.BUDGET_EXHAUSTED);
+            // 预算耗尽同样是一次确定的失败：写进台账才能从管理台重投，
+            // 否则任务只留一条 SSE FAILED 就被 ACK 掉，彻底失去排查与恢复抓手。
+            try {
+                failedTaskService.record(msg, attempt, e);
+            } catch (RuntimeException recordError) {
+                log.error("failed_analysis_record_write_failed mediaId={}", mediaId, recordError);
+            }
             taskEventService.publishAnalysis(mediaId, msg.getUserGoal(), mode,
                     TaskStatus.of(TaskStatus.State.FAILED, e.getMessage()),
                     TaskStage.BUDGET_EXHAUSTED);
@@ -245,6 +279,19 @@ public class VideoAnalysisConsumer implements RocketMQListener<AnalysisTaskMsg> 
     }
 
     /** 结构性校验：返回拒绝原因，合法则返回 null。 */
+    /** 实时完成事件也带上音画冲突与证据审计，避免「只有重新打开面板才看得到」。 */
+    private TaskStatus completionWithConflicts(AgentState state, Long contextMediaId) {
+        try {
+            VideoContext context = checkpointService.loadContext(contextMediaId);
+            if (context == null) return TaskStatus.completed(state);
+            EvidenceAuditReport audit = evidenceVerificationService.auditResult(context, state.result());
+            return TaskStatus.completed(state, audit.conflicts(), audit);
+        } catch (RuntimeException e) {
+            log.warn("conflict_notice_failed mediaId={}", contextMediaId, e);
+            return TaskStatus.completed(state);
+        }
+    }
+
     private String rejectionReason(AnalysisTaskMsg msg) {
         if (msg == null) return "消息体为空";
         if (msg.getMediaId() == null) return "缺少 mediaId";

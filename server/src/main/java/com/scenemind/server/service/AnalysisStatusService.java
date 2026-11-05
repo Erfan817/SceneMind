@@ -2,20 +2,36 @@ package com.scenemind.server.service;
 
 import com.scenemind.server.dto.AgentState;
 import com.scenemind.server.dto.AnalysisMode;
+import com.scenemind.server.dto.AnalysisResult;
+import com.scenemind.server.dto.EvidenceAuditReport;
 import com.scenemind.server.dto.TaskStage;
 import com.scenemind.server.dto.TaskStatus;
+import com.scenemind.server.dto.VideoContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 @Service
 public class AnalysisStatusService {
 
     private final AgentCheckpointService checkpointService;
     private final AnalysisDispatchService dispatchService;
+    private final EvidenceVerificationService evidenceVerificationService;
 
+    /** 两参构造器保留给既有单测（无需 Spring、无需真实上下文）。 */
     public AnalysisStatusService(AgentCheckpointService checkpointService,
                                  AnalysisDispatchService dispatchService) {
+        this(checkpointService, dispatchService, new EvidenceVerificationService());
+    }
+
+    @Autowired
+    public AnalysisStatusService(AgentCheckpointService checkpointService,
+                                 AnalysisDispatchService dispatchService,
+                                 EvidenceVerificationService evidenceVerificationService) {
         this.checkpointService = checkpointService;
         this.dispatchService = dispatchService;
+        this.evidenceVerificationService = evidenceVerificationService;
     }
 
     public TaskStatus current(Long mediaId, String goal) {
@@ -31,7 +47,10 @@ public class AnalysisStatusService {
         }
         AgentState result = checkpointService.loadResult(mediaId, goal, mode);
         if (result != null && result.result() != null) {
-            return TaskStatus.completed(result);
+            // 结果复用/重新打开面板时同样带上音画冲突与证据审计，而不只在实时 SSE 里出现一次。
+            EvidenceAuditReport audit = evidenceAudit(mediaId, result.result());
+            return TaskStatus.completed(result,
+                    audit == null ? List.of() : audit.conflicts(), audit);
         }
 
         TaskStage stage = checkpointService.loadStage(mediaId, goal, mode);
@@ -54,6 +73,17 @@ public class AnalysisStatusService {
 
     public TaskStage stage(Long mediaId, String goal, AnalysisMode mode) {
         return checkpointService.loadStage(mediaId, goal, mode);
+    }
+
+    /** 审计是增强信号：上下文读取失败时降级为 null，不能拖垮状态查询。 */
+    private EvidenceAuditReport evidenceAudit(Long mediaId, AnalysisResult result) {
+        try {
+            VideoContext context = checkpointService.loadContext(mediaId);
+            if (context == null) return null;
+            return evidenceVerificationService.auditResult(context, result);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private String statusMessage(TaskStage stage) {

@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -103,6 +104,32 @@ public class AgentTelemetry {
         String traceId = currentTrace.get();
         TraceData trace = traceId == null ? null : traces.get(traceId);
         if (trace != null) trace.values.put(metric, value);
+    }
+
+    /**
+     * 把一段可解释诊断挂到当前 trace 上（如 retrieval / evidence / retry）。
+     * 与 counters 的聚合数字不同，这里存结构化对象，供 /analysis/agent-trace
+     * 与前端调试面板直接消费；冲突信号单独放在 trace.conflicts。
+     */
+    public void sectionCurrent(String section, Object value) {
+        TraceData trace = current();
+        if (trace != null) trace.diagnostics.put(section, value);
+    }
+
+    /** 供同一线程内的编排器读取刚写入的诊断（例如重试策略决策）。 */
+    public Object currentSection(String section) {
+        TraceData trace = current();
+        return trace == null ? null : trace.diagnostics.get(section);
+    }
+
+    public void conflictsCurrent(Object conflicts) {
+        TraceData trace = current();
+        if (trace != null) trace.conflicts = conflicts;
+    }
+
+    private TraceData current() {
+        String traceId = currentTrace.get();
+        return traceId == null ? null : traces.get(traceId);
     }
 
     public void failCurrentStage(String stage, long startedNanos) {
@@ -240,6 +267,8 @@ public class AgentTelemetry {
         private final Map<String, Long> stageDurations = new ConcurrentHashMap<>();
         private final Map<String, LongAdder> counters = new ConcurrentHashMap<>();
         private final Map<String, Double> values = new ConcurrentHashMap<>();
+        private final Map<String, Object> diagnostics = new ConcurrentHashMap<>();
+        private volatile Object conflicts = List.of();
         private final DoubleAdder estimatedCost = new DoubleAdder();
 
         private TraceData(String traceId, Long taskId, String goalDigest, String taskKey) {
@@ -270,6 +299,12 @@ public class AgentTelemetry {
             result.put("counters", counterSnapshot);
             result.put("values", new LinkedHashMap<>(values));
             result.put("estimatedCost", estimatedCost.sum());
+            result.put("diagnostics", new LinkedHashMap<>(diagnostics));
+            result.put("conflicts", conflicts == null ? List.of() : conflicts);
+            // 顶层再暴露一份 evidenceAudit：MCP 的 verify_evidence 与外部调用方
+            // 不需要理解 diagnostics 的分区结构，直接读这个字段即可。
+            Object evidence = diagnostics.get("evidence");
+            if (evidence != null) result.put("evidenceAudit", evidence);
             return result;
         }
     }

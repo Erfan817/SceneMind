@@ -1,10 +1,12 @@
 package com.scenemind.server.service;
 
+import com.scenemind.core.ranking.RankingConfig;
 import com.scenemind.core.ranking.TextSimilarity;
 import com.scenemind.server.dto.AgentFeedback;
 import com.scenemind.server.dto.AgentState;
 import com.scenemind.server.dto.AnalysisMode;
 import com.scenemind.server.dto.AnalysisResult;
+import com.scenemind.server.dto.EvidenceAuditReport;
 import com.scenemind.server.dto.VideoContext;
 import org.springframework.stereotype.Service;
 
@@ -19,11 +21,14 @@ public class AgentEvaluationService {
 
     private final AgentCheckpointService checkpointService;
     private final EvidenceVerificationService evidenceVerificationService;
+    private final RankingConfig rankingConfig;
 
     public AgentEvaluationService(AgentCheckpointService checkpointService,
-                                  EvidenceVerificationService evidenceVerificationService) {
+                                  EvidenceVerificationService evidenceVerificationService,
+                                  RankingConfig rankingConfig) {
         this.checkpointService = checkpointService;
         this.evidenceVerificationService = evidenceVerificationService;
+        this.rankingConfig = rankingConfig;
     }
 
     public Map<String, Object> evaluate(Long mediaId, String goal) {
@@ -59,7 +64,11 @@ public class AgentEvaluationService {
         // 以及「结论是否覆盖了视频的不同时段」。
         metrics.put("evidenceRedundancyRate", evidenceRedundancyRate(result));
         metrics.put("temporalSpread", temporalSpread(result));
-        metrics.put("conflictFlagged", evidenceVerificationService.detectConflicts(context).hasConflict());
+        // 结构化证据审计：MCP 的 verify_evidence 与前端调试面板都消费这份数据，
+        // 而不是各自重新实现一套伪校验。
+        EvidenceAuditReport audit = evidenceVerificationService.auditResult(context, result);
+        metrics.put("evidenceAudit", audit.toMap());
+        metrics.put("conflictFlagged", audit.hasConflicts());
         return metrics;
     }
 
@@ -71,7 +80,8 @@ public class AgentEvaluationService {
         for (int i = 0; i < evidence.size(); i++) {
             for (int j = i + 1; j < evidence.size(); j++) {
                 pairs++;
-                if (TextSimilarity.jaccard(evidence.get(i).content(), evidence.get(j).content()) >= 0.82) {
+                if (TextSimilarity.jaccard(evidence.get(i).content(), evidence.get(j).content())
+                        >= rankingConfig.redundancySimilarity()) {
                     duplicated++;
                 }
             }
@@ -83,7 +93,7 @@ public class AgentEvaluationService {
         if (result == null || result.evidence() == null || result.evidence().isEmpty()) return 0;
         Set<Long> windows = new HashSet<>();
         for (AnalysisResult.Evidence evidence : result.evidence()) {
-            windows.add(evidence.timestampMs() / 300_000L);
+            windows.add(evidence.timestampMs() / rankingConfig.windowMs());
         }
         return (double) windows.size() / result.evidence().size();
     }
