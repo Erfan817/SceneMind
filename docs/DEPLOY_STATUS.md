@@ -35,7 +35,7 @@ Docker Compose 方案因此不可用，改用 [`DEPLOY_BARE.md`](DEPLOY_BARE.md)
 验证过程中修复了两个只在真实环境暴露的问题：
 
 1. **FFmpeg 4.4 兼容**：Ubuntu 22.04 自带 ffmpeg 4.4 不识别 `-fps_mode`（5.1+ 才有），OCR 抽帧直接失败。`VideoContextService` 已改为先试 `-fps_mode`、失败自动回退 `-vsync`。
-2. **Nginx Basic Auth 与 Bearer Token 冲突**：两者共用 `Authorization` 头。已改为「页面需要 Basic Auth，`/user` `/media` `/analysis` `/admin` `/health` 交给应用自己鉴权」。
+2. **Nginx Basic Auth 与 Bearer Token 冲突**：两者共用 `Authorization` 头，会导致登录后 API 被 Nginx 拦掉。当前部署已改为**单层应用登录**（页面直接打开，登录只做应用账号）；公开注册已关闭、登录有用户名+IP 双维度限流，Basic Auth 仅在需要隐藏登录页时再启用。
 
 ## 3. 已知限制
 

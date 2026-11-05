@@ -54,7 +54,7 @@ docker run --rm caddy:2.8-alpine caddy hash-password --plaintext '你的密码'
 
 > 输出形如 `$2a$14$...`，**在 `.env` 里必须用单引号包起来**：`BASIC_AUTH_HASH='$2a$14$...'`。不加引号会被 shell 当成位置参数展开，导致密码校验失败。
 
-> 站点默认开启 Basic Auth：陌生人即使知道地址也进不来，避免被刷 API 额度。想公开访问，删掉 `deploy/Caddyfile` 里的 `basic_auth` 块并重启 `web`。
+> 站点默认开启 Basic Auth：陌生人即使知道地址也进不来，避免被刷 API 额度。单用户私用可以删掉 `deploy/Caddyfile` 里的 `basic_auth` 块，只保留应用登录（注册关闭 + 登录限流）；想公开访问也建议保持关闭注册。
 
 ## 3. 一键启动
 

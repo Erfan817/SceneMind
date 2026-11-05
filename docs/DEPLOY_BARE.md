@@ -19,7 +19,7 @@
 | RocketMQ | 镜像 | 阿里云 Apache 镜像的二进制包 |
 | Qdrant | 容器 | **关闭**（`QDRANT_ENABLED=false`，应用降级到本地向量） |
 | 前端 | Caddy 镜像内构建 | 本地 `npm run build` 后上传 `dist/` |
-| 反向代理 | Caddy + 自动 HTTPS | Nginx + Basic Auth（无公网证书） |
+| 反向代理 | Caddy + 自动 HTTPS | Nginx + 应用登录（可选 Basic Auth） |
 
 ## 2. 组件与端口
 
@@ -72,7 +72,7 @@ ssh root@HOST 'systemctl restart scenemind && systemctl reload nginx'
 
 ## 5. 已知限制
 
-- **无公网 HTTPS**：Let's Encrypt ACME 被网络阻断，只能用 HTTP + Basic Auth；要 HTTPS 需要域名备案 + 国内 CDN 证书，或改用有外网出口的服务器。
+- **无公网 HTTPS**：Let's Encrypt ACME 被网络阻断，只能用 HTTP；要 HTTPS 需要域名备案 + 国内 CDN 证书，或改用有外网出口的服务器。站点只保留应用登录（注册关闭 + 登录限流）；如需隐藏登录页可再加 Basic Auth。
 - **Qdrant 关闭**：语义通道退化为本地 cosine + 关键词，功能可用但大视频检索质量不如完整部署。
 - **单机、无多租户**；内存 < 2GB 时必须配 swap（本机 4GB swap）。
 - `yt-dlp` 通过 `pip3 install -i https://mirrors.aliyun.com/pypi/simple/ yt-dlp` 安装；若失败，URL 视频不可用，本地文件上传不受影响。
