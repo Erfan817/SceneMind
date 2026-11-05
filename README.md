@@ -147,7 +147,7 @@ flowchart LR
 
 ![工作台视频列表](docs/images/video-library.png)
 
-> `docs/images/video-library.png` 约 1.9MB（2873×1666），加载较慢属于正常现象。
+> 截图来自内置示例数据（`?demo`），不是真实用户数据；分辨率 1440×900。
 
 提交分析目标：可以直接写需求，也可以用「生成学习笔记 / 提炼会议结论 / 梳理操作步骤」预设。
 
