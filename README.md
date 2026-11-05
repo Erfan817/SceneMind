@@ -86,6 +86,8 @@
 
 文档方面：`docs/` 下补齐项目说明、贡献边界、扩展面板设计、评测报告与 2 份 ADR；简历与面试话题移到 `docs/private/`，该目录已在 `.gitignore` 中忽略，不随公开仓库发布。
 
+性能与等待时间见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md)：2 分 21 秒视频实测从约 200s 降到 123s，并列出可调参数与下一步无损优化。
+
 ### 5. MCP Server：把证据结果交给别的 Agent
 
 新增 `mcp/`：零外部依赖的 MCP Server（只用 Node.js 内置模块，stdio JSON-RPC 2.0，不需要 `npm install`）。外部 Agent 把视频链接与分析目标交给它，它调用 SceneMind 后端，把带**时间戳 / 来源 / 原文**的结构化证据返回给对方 Agent，而不是一段无法核验的摘要。

@@ -274,6 +274,7 @@ public class DeepSeekUtils {
                     evidence.claim 必须原样复制它所支持的 conclusion，timestampMs 必须落在原始片段内，source 只能是 ASR、OCR 或 ASR+OCR。
                     不得使用视频上下文之外的事实。
                     如果存在 Critic 反馈，只修正被指出的问题，并保留已经核验通过的结论和证据。
+                    输出保持精炼：同一句原文只在 evidence 中出现一次，禁止重复引用；结论与建议避免复述同一内容。
 
                     只返回 JSON：
                     {

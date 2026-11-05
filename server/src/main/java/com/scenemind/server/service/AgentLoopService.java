@@ -36,6 +36,7 @@ public class AgentLoopService {
     private final long maxDurationMs;
     private final long maxEstimatedTokens;
     private final double maxEstimatedCost;
+    private final boolean advisoryPassEnabled;
 
     public AgentLoopService(DeepSeekUtils deepSeekUtils,
                             LongVideoContextService longVideoContextService,
@@ -46,7 +47,8 @@ public class AgentLoopService {
                             @Value("${agent.budget.max-rounds:2}") int maxRounds,
                             @Value("${agent.budget.max-duration-ms:120000}") long maxDurationMs,
                             @Value("${agent.budget.max-estimated-tokens:50000}") long maxEstimatedTokens,
-                            @Value("${agent.budget.max-estimated-cost:0}") double maxEstimatedCost) {
+                            @Value("${agent.budget.max-estimated-cost:0}") double maxEstimatedCost,
+                            @Value("${agent.critic.advisory-pass:true}") boolean advisoryPassEnabled) {
         this.deepSeekUtils = deepSeekUtils;
         this.longVideoContextService = longVideoContextService;
         this.checkpointService = checkpointService;
@@ -60,6 +62,7 @@ public class AgentLoopService {
         this.maxDurationMs = maxDurationMs;
         this.maxEstimatedTokens = maxEstimatedTokens;
         this.maxEstimatedCost = maxEstimatedCost;
+        this.advisoryPassEnabled = advisoryPassEnabled;
     }
 
     public AgentState run(VideoContext context) {
@@ -218,6 +221,18 @@ public class AgentLoopService {
                 deepSeekUtils.critique(context, plan, result, criticInstruction(profile)));
         critique = enforceStructureBounds(result, critique, profile);
         critique = enforceEvidenceBounds(context, result, critique);
+        // 纯风格类 feedback 不值得再烧一整轮 Executor：事实证据、目标覆盖、结构都已通过时，
+        // 保留 Critic 的建议但按通过处理；有缺口/无证据结论/需要时间戳时仍然严格重跑。
+        if (advisoryPassEnabled && !critique.passed()
+                && !hasBlockingCritique(critique, result, profile)) {
+            telemetry.incrementCurrent("criticAdvisoryPasses", 1);
+            critique = new AgentState.CriticResult(
+                    true,
+                    critique.feedback(),
+                    critique.missingRequirements(),
+                    critique.unsupportedClaims(),
+                    critique.requiredTimestamps());
+        }
         telemetry.incrementCurrent("criticRounds", 1);
         if (critique.passed()) telemetry.incrementCurrent("criticPassed", 1);
 
@@ -371,7 +386,21 @@ public class AgentLoopService {
                                                             AgentState.CriticResult critique,
                                                             ModeProfile profile) {
         critique = normalizeCritique(critique);
+        List<String> structural = structureFeedback(result, profile);
+        if (structural.isEmpty()) return critique;
         List<String> feedback = new ArrayList<>(critique.feedback());
+        feedback.addAll(structural);
+        return new AgentState.CriticResult(
+                false,
+                feedback,
+                critique.missingRequirements(),
+                critique.unsupportedClaims(),
+                critique.requiredTimestamps());
+    }
+
+    /** 只包含确定性结构检查，供“是否值得重跑”的判断复用。 */
+    private List<String> structureFeedback(AnalysisResult result, ModeProfile profile) {
+        List<String> feedback = new ArrayList<>();
         if (result == null || result.title() == null || result.title().isBlank()) {
             feedback.add("补充明确的产物标题");
         }
@@ -385,13 +414,17 @@ public class AgentLoopService {
         if (!missingSections.isEmpty()) {
             feedback.add("补充当前分析模式要求的结构化段落: " + String.join(", ", missingSections));
         }
-        if (feedback.equals(critique.feedback())) return critique;
-        return new AgentState.CriticResult(
-                false,
-                feedback,
-                critique.missingRequirements(),
-                critique.unsupportedClaims(),
-                critique.requiredTimestamps());
+        return feedback;
+    }
+
+    /** 有事实/覆盖/结构问题才值得重跑；其余 feedback 视为建议。 */
+    private boolean hasBlockingCritique(AgentState.CriticResult critique,
+                                        AnalysisResult result,
+                                        ModeProfile profile) {
+        return !structureFeedback(result, profile).isEmpty()
+                || !safeList(critique.missingRequirements()).isEmpty()
+                || !safeList(critique.unsupportedClaims()).isEmpty()
+                || !safeList(critique.requiredTimestamps()).isEmpty();
     }
 
     private VideoContext contextForRetry(Long mediaId,
