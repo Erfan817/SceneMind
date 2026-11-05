@@ -36,7 +36,8 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
-      - run: ./mvnw test
+      # 用 bash 显式执行，避免克隆到没有可执行位的环境时 ./mvnw 直接 Permission denied。
+      - run: bash ./mvnw test
 
   frontend:
     runs-on: ubuntu-latest
@@ -65,3 +66,16 @@ jobs:
         with:
           node-version: "22"
       - run: node --test
+
+  # MCP Server：零外部依赖的 stdio JSON-RPC 实现，测试用假后端，不需要 Spring / Docker。
+  mcp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test test/*.test.js
