@@ -516,7 +516,7 @@ export function useAnalysisWorkspace({
     sidebar.value = {
       ...createSidebarState(),
       visible: true,
-      title: `Video Agent · ${item.filename}`,
+      title: `SceneMind · ${item.filename}`,
       mediaId: item.id,
       goal,
       analysisMode

@@ -6,9 +6,9 @@
     <header class="navbar">
       <div class="nav-content">
         <div class="brand">
-          <span class="brand-do">DO</span>
-          <span class="brand-video">Video</span>
-          <span class="beta-badge">PRO</span>
+          <span class="brand-scene">SCENE</span>
+          <span class="brand-mind">MIND</span>
+          <span class="beta-badge">AGENT</span>
         </div>
 
         <div class="nav-controls">
@@ -36,8 +36,8 @@
 
     <main class="main-container">
       <section class="hero-section">
-        <h1 class="slogan-main">DECODE YOUR VIDEO</h1>
-        <p class="slogan-sub">影视重构 · 算力赋能</p>
+        <h1 class="slogan-main">PROOF IN EVERY SECOND</h1>
+        <p class="slogan-sub">长视频 · 每条结论都有据可查</p>
 
         <div class="upload-wrapper">
           <input
@@ -217,14 +217,14 @@
               <button
                   class="dock-item ai-core"
                   :disabled="item.status !== 'COMPLETED'"
-                  :title="actionTitle(item, '打开 Video Agent')"
+                  :title="actionTitle(item, '打开 SceneMind Agent')"
                   @click="openAgent(item)"
               >
                 <span class="item-icon">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
                 </span>
                 <div class="label-group">
-                  <span class="item-label">Video Agent</span>
+                  <span class="item-label">SceneMind Agent</span>
                 </div>
                 <div class="shimmer"></div>
               </button>
@@ -1512,8 +1512,8 @@ html, body, #app {
 .navbar { position: sticky; top: 0; z-index: 100; width: 100%; padding: 1.2rem 0; background: rgba(11, 12, 16, 0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border-tech); }
 .nav-content { max-width: 1400px; margin: 0 auto; padding: 0 2rem; display: flex; justify-content: space-between; align-items: center; }
 .brand { display: flex; align-items: baseline; gap: 2px; }
-.brand-do { font-family: 'Dela Gothic One', sans-serif; font-size: 1.8rem; color: var(--text-main); letter-spacing: -1px; }
-.brand-video { font-family: 'Space Grotesk', sans-serif; font-size: 1.8rem; font-weight: 300; }
+.brand-scene { font-family: 'Dela Gothic One', sans-serif; font-size: 1.8rem; color: var(--text-main); letter-spacing: -1px; }
+.brand-mind { font-family: 'Space Grotesk', sans-serif; font-size: 1.8rem; font-weight: 300; color: var(--accent-lime); }
 .beta-badge { font-size: 0.7rem; font-weight: 700; background: var(--accent-lime); color: var(--text-inverse); padding: 2px 6px; border-radius: 2px; margin-left: 8px; transform: translateY(-4px); box-shadow: 0 0 5px var(--accent-lime); }
 
 .nav-controls { display: flex; align-items: center; gap: 15px; }
@@ -1831,7 +1831,7 @@ html, body, #app {
 @media (max-width: 720px) {
   .navbar { padding: 0.8rem 0; }
   .nav-content { padding: 0 1rem; }
-  .brand-do, .brand-video { font-size: 1.25rem; }
+  .brand-scene, .brand-mind { font-size: 1.25rem; }
   .status-pill { display: none; }
   .auth-btn { padding: 6px 10px; }
   .main-container { padding: 2.5rem 1rem; }
