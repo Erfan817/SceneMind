@@ -1,0 +1,168 @@
+# 生产部署：单机 Docker Compose。
+# 使用方式见 docs/DEPLOY.md；所有密码/Key 从 .env 读取（.env 不入库）。
+name: scenemind
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_DATABASE: media_db
+      MYSQL_USER: ${MYSQL_APP_USER:-dovideo}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      TZ: Asia/Shanghai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    mem_limit: 768m
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    mem_limit: 192m
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.2
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
+    volumes:
+      - qdrant-data:/qdrant/storage
+    mem_limit: 512m
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    mem_limit: 384m
+
+  # RocketMQ 镜像以 uid 3000 运行，命名卷首次创建属于 root；先修正属主再启动。
+  rmq-init:
+    image: apache/rocketmq:5.3.4
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command:
+      - "mkdir -p /home/rocketmq/store /home/rocketmq/logs && chown -R 3000:3000 /home/rocketmq/store /home/rocketmq/logs"
+    volumes:
+      - rmq-store:/home/rocketmq/store
+      - rmq-logs:/home/rocketmq/logs
+
+  rmqnamesrv:
+    image: apache/rocketmq:5.3.4
+    restart: unless-stopped
+    environment:
+      JAVA_OPT_EXT: -server -Xms256m -Xmx256m -Xmn128m
+    command: sh mqnamesrv
+    volumes:
+      - rmq-logs:/home/rocketmq/logs
+    depends_on:
+      rmq-init:
+        condition: service_completed_successfully
+    mem_limit: 384m
+
+  rmqbroker:
+    image: apache/rocketmq:5.3.4
+    restart: unless-stopped
+    environment:
+      NAMESRV_ADDR: rmqnamesrv:9876
+      JAVA_OPT_EXT: -server -Xms512m -Xmx512m -Xmn256m
+    command: sh mqbroker -n rmqnamesrv:9876 -c /home/rocketmq/broker.conf
+    volumes:
+      - ./rocketmq/broker.prod.conf:/home/rocketmq/broker.conf:ro
+      - rmq-store:/home/rocketmq/store
+      - rmq-logs:/home/rocketmq/logs
+    depends_on:
+      rmq-init:
+        condition: service_completed_successfully
+      rmqnamesrv:
+        condition: service_started
+    mem_limit: 768m
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      SERVER_PORT: 9090
+      DB_URL: jdbc:mysql://mysql:3306/media_db?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf-8&allowPublicKeyRetrieval=true
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MINIO_ENDPOINT: http://minio:9000
+      QDRANT_URL: http://qdrant:6333
+      ROCKETMQ_NAME_SERVER: rmqnamesrv:9876
+    ports:
+      # 只绑定本机：公网访问统一走 Caddy，后端不直接暴露。
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rmqbroker:
+        condition: service_started
+      minio:
+        condition: service_started
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9090/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    mem_limit: 1280m
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/web.Dockerfile
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?SITE_ADDRESS is required}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?BASIC_AUTH_USER is required}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?BASIC_AUTH_HASH is required}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - server
+    mem_limit: 128m
+
+volumes:
+  mysql-data:
+  redis-data:
+  qdrant-data:
+  minio-data:
+  rmq-store:
+  rmq-logs:
+  caddy-data:
+  caddy-config:

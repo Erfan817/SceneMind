@@ -16,6 +16,13 @@
 *.sh         text eol=lf
 docs/benchmark-report.md text eol=lf
 
+# 部署相关文件必须保持 LF：CRLF 会让 .env 里的值带 \r、Dockerfile/Caddyfile 也可能出问题
+.env*        text eol=lf
+Dockerfile   text eol=lf
+*.Dockerfile text eol=lf
+Caddyfile    text eol=lf
+*.conf       text eol=lf
+
 *.cmd text eol=crlf
 *.bat text eol=crlf
 *.png binary

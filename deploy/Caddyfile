@@ -1,0 +1,25 @@
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# 后端 API：同源反向代理，前端不需要跨域配置
+	@api path /user/* /media/* /analysis/* /admin/* /health
+	reverse_proxy @api server:9090
+
+	# 前端静态资源（Vue 构建产物）
+	root * /srv
+	try_files {path} /index.html
+	file_server
+
+	# 站点访问密码：公网实例默认开启，避免陌生人注册与刷 API 额度
+	basic_auth {
+		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+}

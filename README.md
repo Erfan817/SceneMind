@@ -163,6 +163,8 @@ flowchart LR
 
 ## 快速开始
 
+> 想直接在云服务器上跑一个公网实例？见 [docs/DEPLOY.md](docs/DEPLOY.md)：Docker Compose 一键起全栈，Caddy 自动 HTTPS。
+
 ### 前置条件
 
 | 目标 | 需要 |

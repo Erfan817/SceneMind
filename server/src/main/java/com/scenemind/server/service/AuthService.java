@@ -7,6 +7,8 @@ import com.scenemind.server.entity.User;
 import com.scenemind.server.mapper.UserMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -40,14 +42,27 @@ public class AuthService {
 
     private final StringRedisTemplate redisTemplate;
     private final UserMapper userMapper;
+    private final boolean registrationEnabled;
     private final SecureRandom secureRandom = new SecureRandom();
 
+    /** 兼容既有单测/手工构造：默认允许注册。 */
     public AuthService(StringRedisTemplate redisTemplate, UserMapper userMapper) {
+        this(redisTemplate, userMapper, true);
+    }
+
+    @Autowired
+    public AuthService(StringRedisTemplate redisTemplate,
+                       UserMapper userMapper,
+                       @Value("${app.auth.registration-enabled:true}") boolean registrationEnabled) {
         this.redisTemplate = redisTemplate;
         this.userMapper = userMapper;
+        this.registrationEnabled = registrationEnabled;
     }
 
     public AuthResponse register(AuthRequest request) {
+        if (!registrationEnabled) {
+            return response(403, "公开注册已关闭，请联系管理员开通账号", null, null);
+        }
         String username = normalizeUsername(request.username());
         String password = request.password();
         if (username == null || password == null || password.length() < 8
