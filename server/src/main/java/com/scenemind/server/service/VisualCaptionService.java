@@ -46,11 +46,11 @@ public class VisualCaptionService {
             .build();
 
     public VisualCaptionService(@Value("${scenemind.vision.enabled:false}") boolean enabled,
-                                @Value("${scenemind.vision.model:Qwen/Qwen2.5-VL-72B-Instruct}") String model,
+                                @Value("${scenemind.vision.model:Qwen/Qwen3-VL-30B-A3B-Instruct}") String model,
                                 @Value("${ai.deepseek.api-key:}") String apiKey,
                                 @Value("${ai.deepseek.base-url:}") String baseUrl) {
         this.enabled = enabled;
-        this.model = model == null || model.isBlank() ? "Qwen/Qwen2.5-VL-72B-Instruct" : model.trim();
+        this.model = model == null || model.isBlank() ? "Qwen/Qwen3-VL-30B-A3B-Instruct" : model.trim();
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.baseUrl = (baseUrl == null ? "" : baseUrl).replaceAll("/+$", "");
     }
