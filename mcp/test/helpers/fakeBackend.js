@@ -80,6 +80,56 @@ export async function startFakeBackend() {
         ocrTexts: ['前序遍历：根节点、左子树、右子树'],
       },
     ],
+    frameViews: {
+      522000: {
+        timestampMs: 522000,
+        startMs: 522000,
+        endMs: 582000,
+        frameUrl: 'http://minio/fake/frame_000007.jpg',
+        ocrTexts: ['上线时间：8月3日'],
+        transcript: '新功能将于八月一日正式上线。',
+        source: 'ASR+OCR',
+      },
+      627000: {
+        timestampMs: 627000,
+        startMs: 627000,
+        endMs: 687000,
+        frameUrl: 'http://minio/fake/frame_000010.jpg',
+        ocrTexts: ['前序遍历：根节点、左子树、右子树'],
+        transcript: '迭代遍历使用显式栈保存待访问节点。',
+        source: 'ASR+OCR',
+      },
+    },
+    transcriptViews: [
+      { startMs: 522000, endMs: 582000, transcript: '新功能将于八月一日正式上线。', ocrTexts: ['上线时间：8月3日'] },
+      { startMs: 627000, endMs: 687000, transcript: '迭代遍历使用显式栈保存待访问节点。', ocrTexts: ['前序遍历：根节点、左子树、右子树'] },
+    ],
+    timelineView: {
+      mediaId: 4242,
+      durationMs: 709000,
+      entries: [
+        {
+          startMs: 0,
+          endMs: 300000,
+          summary: '课程导入与前序遍历的定义。',
+          keywords: ['前序遍历', '定义'],
+          segmentCount: 5,
+          ocrSegmentCount: 3,
+          captionSegmentCount: 2,
+          frameUrl: 'http://minio/fake/frame_000001.jpg',
+        },
+        {
+          startMs: 300000,
+          endMs: 600000,
+          summary: '递归实现与迭代实现的对比。',
+          keywords: ['递归', '迭代'],
+          segmentCount: 5,
+          ocrSegmentCount: 4,
+          captionSegmentCount: 2,
+          frameUrl: 'http://minio/fake/frame_000007.jpg',
+        },
+      ],
+    },
     followUpAnswer: '根据 [08:42] ASR 与 [08:45] OCR，口播为 8月1日、画面为 8月3日，存在音画冲突。',
   };
 
@@ -155,6 +205,23 @@ export async function startFakeBackend() {
           break;
         case '/analysis/follow-up':
           payload = envelope(0, state.followUpAnswer);
+          break;
+        case '/analysis/frame': {
+          const key = Number(url.searchParams.get('timestampMs'));
+          payload = envelope(0, state.frameViews[key] ?? null);
+          break;
+        }
+        case '/analysis/transcript': {
+          const start = Number(url.searchParams.get('startMs'));
+          const end = Number(url.searchParams.get('endMs'));
+          payload = envelope(
+            0,
+            state.transcriptViews.filter((v) => v.endMs > start && v.startMs < end),
+          );
+          break;
+        }
+        case '/analysis/timeline':
+          payload = envelope(0, state.timelineView);
           break;
         default:
           return send(res, 404, envelope(40400, null));

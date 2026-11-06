@@ -241,7 +241,7 @@ public class DeepSeekUtils {
     public VideoChunk.ChunkSummary summarizeChunk(List<VideoContext.VideoSegment> segments) {
         try {
             String prompt = """
-                    压缩以下五分钟视频片段，保留人物、事件、观点、结论以及重要 OCR 信息。
+                    压缩以下五分钟视频片段，保留人物、事件、观点、结论、重要 OCR 信息以及关键帧画面描述（画面描述只作检索线索，不可当作逐字证据）。
                     只返回 JSON：
                     {
                       "segmentSummary": "不超过 200 字的片段摘要",

@@ -8,8 +8,8 @@
 
 | 项 | 建议 |
 | --- | --- |
-| 视频数 | 1–2 个（公开课 / 会议 / 操作录屏均可，总时长 30 分钟–2 小时） |
-| query 数 | 20–30 条，每条对应一个能在视频里定位到时间点的问题 |
+| 视频数 | 先用 1–2 个跑通格式；对外说明建议扩到 5–10 个（公开课 / 会议 / 操作录屏，总时长 30 分钟–2 小时） |
+| query 数 | 先用 20–30 条；扩到 50–100 条后再谈方向性收益 |
 | 标注粒度 | query → 相关时间戳区间（`startMs`–`endMs`），一条 query 允许多个区间 |
 | 数据来源 | 自己录的、或公开可引用视频；**不要把版权受限内容提交到公开仓库** |
 
@@ -60,7 +60,10 @@
 2. **从系统导出**：分析任务完成后，`VideoContext` 已存在 Checkpoint 里。用管理员账号调用
    `GET /admin/media/{id}/context`（需要 `role=ADMIN` 的用户 token）即可拿到完整的
    `source / userGoal / segments` JSON；把 `segments` 复制进标注文件，再补 `queries` 即可。
-   接口返回的 `evidenceFrames` 等额外字段会被解析器忽略，不需要手工删。
+   接口返回的 `evidenceFrames` 等额外字段会被解析器忽略，不需要手工删；
+3. **B 站公开课快速采集（可选）**：用 `bilibili-video-summary` 的 `bvs <链接> --srt`
+   生成带时间戳的 `transcript.txt`，按 60 秒聚合后填入 `segments`；`frames/` 可用
+   Tesseract 补 OCR。它只负责采集，`queries[].relevant` 仍需人工标注。
 
 ## 3. 运行评测
 

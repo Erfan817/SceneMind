@@ -34,7 +34,7 @@ flowchart LR
         direction TB
         S["server.js<br/>stdin 逐行读 / stdout 只输出 JSON-RPC / stderr 日志"]
         P["protocol.js<br/>JSON-RPC 2.0 解析·分发·错误码"]
-        T["tools.js<br/>7 个工具定义 + 校验 + 分派 + 轮询"]
+        T["tools.js<br/>10 个工具定义 + 校验 + 分派 + 轮询"]
         R["resources.js<br/>report / trace 模板与读取"]
         C["scenemindClient.js<br/>业务方法 + 结果聚合 + demo 分支"]
         H["httpClient.js<br/>Result 解包 / Bearer token / 超时 / 错误归一化"]
@@ -95,7 +95,7 @@ Agent ↔ stdio JSON-RPC 2.0 ↔ server.js
 
 ## 3. 工具与资源清单
 
-### Tools（7 个，前缀 `scenemind_`）
+### Tools（10 个，前缀 `scenemind_`）
 
 | 工具 | 作用 | 是否等待完成 |
 | --- | --- | --- |
@@ -106,10 +106,13 @@ Agent ↔ stdio JSON-RPC 2.0 ↔ server.js
 | `scenemind_search_evidence` | 带时间戳的证据命中片段 | 否 |
 | `scenemind_ask_followup` | 基于已有结果的追问 | 否 |
 | `scenemind_verify_evidence` | 逐条证据「是否可核验」的判定说明 | 否 |
+| `scenemind_peek_frame` | 某时刻的画面证据：最近关键帧 URL + OCR / 转写（`GET /analysis/frame`），供 Agent「亲眼」核验 | 否 |
+| `scenemind_get_transcript` | 按时间范围切出转写片段（`GET /analysis/transcript`），精确读取某几秒 | 否 |
+| `scenemind_get_timeline` | 5 分钟章节时间轴（`GET /analysis/timeline`）：摘要、关键词、证据密度与代表关键帧，用于先导航再精读 | 否 |
 
-典型调用链：`submit_video → analyze → wait_for_result（或 get_result）→ 可选 search_evidence / ask_followup / verify_evidence`。
+典型调用链：`submit_video → analyze → wait_for_result（或 get_result）→ 可选 get_timeline / search_evidence / ask_followup / verify_evidence / peek_frame / get_transcript`。
 
-`get_result` / `wait_for_result` 共享同一个结构化结果对象，字段包括：`state`、`completed`、`failed`、`message`、`markdown`、`evidence[]`（时间戳/来源/原文）、`conflicts[]`、`conflictFlagged`、`evidenceAudit`、`trace`（URI + traceId + 提示）、`hint`。
+`get_result` / `wait_for_result` 共享同一个结构化结果对象，字段包括：`state`、`completed`、`failed`、`message`、`markdown`、`evidence[]`（时间戳/来源/原文）、`conflicts[]`、`conflictFlagged`、`evidenceAudit`、`platformSignals.metrics.citationPrecision/citationRecall/citationF1`、`trace`（URI + traceId + 提示）、`hint`。
 
 ### Resources
 
@@ -215,5 +218,5 @@ demo 内置一条与 `docs/benchmark-report.md` 一致的音画冲突：口播�
 
 ## 7. 验证状态与依赖真实后端才能验证的部分
 
-- `cd mcp && node --test test/*.test.js`：52 个测试全绿。`server.test.js` 用 `node:http` 起本地假 SceneMind 服务并拉起子进程跑完整 `tools/call`；`httpServer.test.js` 验证 Streamable HTTP 的鉴权、`tools/list`、通知 202 与健康检查；`demo.test.js` 验证离线 demo；`protocol.test.js` 验证纯函数与错误码。
+- `cd mcp && node --test test/*.test.js`：57 个测试全绿。`server.test.js` 用 `node:http` 起本地假 SceneMind 服务并拉起子进程跑完整 `tools/call`；`httpServer.test.js` 验证 Streamable HTTP 的鉴权、`tools/list`、通知 202 与健康检查；`demo.test.js` 验证离线 demo；`protocol.test.js` 验证纯函数与错误码。
 - **依赖真实后端才能验证**（当前只能用假服务验证协议与数据形状，不能验证真实业务语义）：真实 Spring Boot 的 token 会话、异步 202 到 `COMPLETED` 的真实耗时与阶段流转、真实 ASR/OCR 产出的证据与时间戳、`ConflictDetector` 的真实冲突判定、`agent-evaluation` 的真实指标数值、以及 `follow-up` / `evidence-search` 的真实模型回答。这些需要启动 `server/` 及其中间件（见仓库 `README.md` 快速开始）后联调。

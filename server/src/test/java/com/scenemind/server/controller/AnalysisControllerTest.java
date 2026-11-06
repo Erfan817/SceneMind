@@ -27,7 +27,8 @@ class AnalysisControllerTest {
         AnalysisController controller = new AnalysisController(ai, dispatch,
                 mock(AgentCheckpointService.class), mock(AgentEvaluationService.class),
                 mock(AgentTelemetry.class), media, mock(TaskEventService.class),
-                mock(AnalysisStatusService.class), mock(ModeRouter.class), Runnable::run);
+                mock(AnalysisStatusService.class), mock(ModeRouter.class),
+                mock(EvidenceViewService.class), Runnable::run);
         AgentFeedback feedback = new AgentFeedback(7L, "goal", "LEARNING", null,
                 null, null, null, List.of("new task"), null, null, null);
 

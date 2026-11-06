@@ -188,6 +188,22 @@ export function useAnalysisWorkspace({
     }
   })
 
+  // 抽帧诊断：diagnostics.frames 由 VideoContext 的 OCR 分支写入。
+  // 课程/PPT 走 dense 时，candidates 会明显大于 kept，便于确认密集采样生效。
+  const frameDiagnostics = computed(() => {
+    const diagnostics = sidebar.value.diagnostics
+    const frames = diagnostics && typeof diagnostics === 'object' ? diagnostics.frames : null
+    if (!frames || typeof frames !== 'object') return null
+    return {
+      mode: frames.mode == null ? '' : String(frames.mode),
+      candidates: asNumber(frames.candidates),
+      kept: asNumber(frames.kept),
+      suppressed: asNumber(frames.suppressed),
+      maxFrames: asNumber(frames.maxFrames),
+      denseIntervalSeconds: asNumber(frames.denseIntervalSeconds)
+    }
+  })
+
   // 证据核验：优先用 TaskStatus.evidenceAudit，缺失时回退到 diagnostics.evidence。
   const evidenceAuditSummary = computed(() => {
     const diagnostics = sidebar.value.diagnostics
@@ -895,6 +911,7 @@ export function useAnalysisWorkspace({
     renderedMarkdown,
     conflictNotices,
     retrievalDiagnostics,
+    frameDiagnostics,
     evidenceAuditSummary,
     evaluationSignals,
     transcribe,

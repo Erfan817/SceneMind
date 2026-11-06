@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | 接入层 | Vue 3 工作台（沿用）、浏览器扩展（补齐本地文件上传 / 追问 / b23 展开 / 表格与嵌套列表，见 #20） | 部分沿用 + 本次扩展 |
 | 编排层 | 分片上传/断点续传、RocketMQ 削峰、幂等锁、令牌桶、重试与降级、Checkpoint、失败任务重投 | 沿用，未改动 |
-| 上下文层 | FFmpeg 音频切片、场景关键帧、ASR/OCR 并行与容错、VideoContext / VideoChunk | 沿用，未改动 |
+| 上下文层 | FFmpeg 音频切片、场景关键帧、ASR/OCR 并行与容错、VideoContext / VideoChunk；新增课程/PPT dense 抽帧（见 #23） | 沿用 + 抽帧策略增强 |
 | Agent 层 | Planner / Executor / Critic、四类模式路由、结构化产物、两轮预算 | 沿用，未改动 |
 | 存储层 | MySQL / Redis / MinIO / Qdrant、Flyway 迁移 | 沿用，未改动 |
 | **策略层：检索排序** | **RRF 多通道融合、通道隔离、时间窗覆盖、近重复抑制、自适应 TopK、可解释诊断、配置化** | **本次主导设计与实现** |
@@ -44,12 +44,16 @@
 | 19 | RRF 通道隔离 | 三个 `ChannelRanking` 拿到同一份全量候选，`matchedChannels` 恒为 3，弱证据扩召回永不触发 | 内核与适配层都按 `channelsPresent` 过滤；空标注的旧数据保持原行为 | 修复 | `HybridRankerTest` 通道隔离用例 |
 | 20 | 浏览器扩展补全 | 骨架版：不支持本地文件上传、追问、b23 时间戳跳转、表格/嵌套列表 | 新增 5MB 分片上传 + 进度、结果追问、b23 短链展开、表格/嵌套列表渲染；扩展测试 59 个 | 新增 | `extension/tests/{chunkUpload,markdown}.test.js` |
 | 20 | 评测同链路 | 评测自行拼装 `rank()`，参数与线上脱节，改配置不影响报告 | 评测走 `fuse → TopKPolicy.decide → select`，读与线上同名的 `SCENEMIND_*` 环境变量；报告新增「生效策略配置」小节 | 重构 | `OfflineEvaluatorTest`；CI 报告 diff 门禁 |
-| 21 | 自检断言 | 8 条，只覆盖相对基线不退化 | 11 条，新增 3 条绝对阈值：Recall ≥ 0.75、时间覆盖率 ≥ 0.75、冗余率 ≤ 0.20 | 新增 | `bash scripts/run-benchmark.sh` 输出 |
+| 21 | 自检断言 | 8 条，只覆盖相对基线不退化 | 12 条：新增 3 条绝对阈值（Recall ≥ 0.75、时间覆盖率 ≥ 0.75、冗余率 ≤ 0.20）和 1 条引用质量下限（CiteF1 ≥ 0.75） | 新增 | `bash scripts/run-benchmark.sh` 输出 |
 | 22 | MCP Server | 无，外部 Agent 只能自己调后端接口 | `mcp/`：零外部依赖、stdio JSON-RPC 2.0，把长视频交给 SceneMind 分析，并把带时间戳的证据结果返回给调用方 Agent | 新增 | `mcp/` 的 `node --test` 用例；`mcp/README.md` |
+| 23 | 课程/PPT 抽帧 | 只走 FFmpeg `select=gt(scene,0.35)` + 30 秒保底，PPT 逐行出现时容易漏帧 | 新增 `core.frame`：dense 固定间隔采样 + 64×64 灰度 MAE/变化像素比例双指标；`FrameModeResolver` 按学习模式与标题/目标自动选 scene/dense；参数外部化到 `scenemind.frame.*`，诊断写入 `diagnostics.frames` | 新增 | `FrameChangeDetectorTest`、`DenseFrameSelectorTest`、`FrameModeResolverTest` 共 12 个用例；全量 111 个后端用例通过 |
+| 24 | 语义通道分辨率 | `semanticScore` 按 5 分钟 chunk 计算，同一 chunk 内 60s 片段共享一个语义名次，段级排序主要靠词法/视觉 | 新增 segment 级向量索引：`indexSegments()` 把 60s 片段单独嵌入写入 Qdrant，`granularity=segment` 与 chunk 点区分；检索时 chunk 粗排 + segment 精排，Qdrant 不可用回退 chunk 分 | 新增 | `VideoEvidenceRetrievalServiceSegmentSemanticTest` 2 个用例；`diagnostics.retrieval.semanticResolution` |
+| 25 | 视觉语义通道 | 视觉通道只是 OCR 关键词命中率，PPT 图表、演示动作、产品外观等无字画面检索不到 | `VisualCaptionService` 对关键帧生成 VLM 短描述，写入 `VideoSegment.visualCaptions`；视觉通道同时看 OCR 与描述；**描述只参与召回，不进入 EvidenceAuditor 可引用来源**；`scenemind.vision.enabled` 默认关闭，`max-frames` 做预算裁剪 | 新增 | `VisualCaptionServiceTest` 4 个用例；`VideoEvidenceRetrievalServiceCaptionTest` |
+| 26 | 引用质量与证据查看 | 只有召回/覆盖率，无法量化「每条结论是否都有可核验出处」；外部 Agent 也看不到画面 | 新增 `core.eval.CitationMetrics`（CiteP/CiteR/CiteF1）；在线 `AgentEvaluationService` 同步输出；MCP 新增 `scenemind_peek_frame` / `get_transcript` / `get_timeline`，工具数 7 → 10 | 新增 | `CitationMetricsTest` 3 个用例；MCP 57 个用例 |
 
 ## 3. 新增文件清单
 
-**核心内核（`server/src/main/java/com/scenemind/core/`，20 个文件，零框架依赖）**
+**核心内核（`server/src/main/java/com/scenemind/core/`，29 个文件，零框架依赖）**
 
 ```
 ranking/  RetrievalChannel, Candidate, RankingConfig, ChannelRanking,
@@ -57,7 +61,10 @@ ranking/  RetrievalChannel, Candidate, RankingConfig, ChannelRanking,
           LinearBaselineRanker, HybridRanker, TopKPolicy
 evidence/ RejectionReason, EvidenceModels, AuditResult,
           EvidenceAuditor, ConflictDetector
-eval/     BenchmarkFixtures, EvaluationMetrics, OfflineEvaluator, SceneMindBenchmark
+frame/    FrameMode, FrameSelectionConfig, FrameChange, FrameSignature,
+          FrameChangeDetector, FrameSample, DenseFrameSelector, FrameModeResolver
+eval/     BenchmarkFixtures, EvaluationMetrics, OfflineEvaluator, SceneMindBenchmark,
+          CitationMetrics
 ```
 
 **Spring 适配与配置**
@@ -72,23 +79,33 @@ server/.../dto/TaskStatus.java                                               （
 server/.../service/AgentLoopService.java                                     （接 retryable 分流与冲突）
 server/.../service/AnalysisStatusService.java                                （历史结果恢复时补冲突标注）
 server/.../service/AgentTelemetry.java                                       （diagnostics / conflicts 落 trace）
-server/.../service/AgentEvaluationService.java                               （新增 3 个指标 + 复用 ranking 配置）
+server/.../service/AgentEvaluationService.java                               （新增 3 个指标 + CiteP/CiteR/CiteF1 + 复用 ranking 配置）
+server/.../config/FrameSelectionConfiguration.java                           （新增：scenemind.frame.* 配置）
+server/.../service/VisualCaptionService.java                                 （新增：关键帧 VLM 描述，仅召回）
+server/.../service/EvidenceViewService.java                                  （新增：frame/transcript/timeline 证据视图）
+server/.../dto/FrameView.java / TranscriptView.java / TimelineView.java      （新增：证据查看 DTO）
 ```
 
-**测试（新增 12 个测试类；`server` 现有 26 个测试类 / 82 个用例）**
+**测试（新增 18 个测试类；`server` 现有 34 个测试类 / 111 个用例，1 个真实标注集用例默认跳过）**
 
 ```
-core 纯函数层（5 个文件 / 31 个用例）
+core 纯函数层（9 个文件 / 46 个用例）
 server/src/test/java/com/scenemind/core/ranking/{HybridRankerTest,TopKPolicyTest}.java
 server/src/test/java/com/scenemind/core/evidence/{EvidenceAuditorTest,ConflictDetectorTest}.java
-server/src/test/java/com/scenemind/core/eval/OfflineEvaluatorTest.java
+server/src/test/java/com/scenemind/core/frame/{FrameChangeDetectorTest,DenseFrameSelectorTest,FrameModeResolverTest}.java
+server/src/test/java/com/scenemind/core/eval/{OfflineEvaluatorTest,CitationMetricsTest}.java
 
-证据链路与 trace 契约（5 个文件 / 16 个用例）
+证据链路与 trace 契约（7 个文件 / 20 个用例）
 server/.../service/EvidenceVerificationServiceAuditTest.java
 server/.../service/EvidenceRetryPolicyTest.java
 server/.../service/EvidenceAuditIntegrationTest.java
 server/.../service/AgentTelemetryTest.java
-server/.../eval/RealAnnotationEvaluationTest.java
+server/.../service/EvidenceViewServiceTest.java
+server/.../service/VideoEvidenceRetrievalServiceSegmentSemanticTest.java
+server/.../service/VideoEvidenceRetrievalServiceCaptionTest.java
+
+视觉与检索适配（1 个文件 / 4 个用例）
+server/.../service/VisualCaptionServiceTest.java
 
 认证与配额（1 个文件 / 3 个用例）
 server/.../service/AuthServiceTest.java
@@ -124,10 +141,10 @@ server/pom.xml                              groupId 规范化
 | 命令 | 结果 |
 | --- | --- |
 | `JAVA_HOME=<JDK21> mvnw.cmd -B test-compile`（server，Windows） | 退出码 0 |
-| `JAVA_HOME=<JDK21> mvnw.cmd -B test`（server，Windows） | 26 个测试类、82 个用例、0 失败、0 错误 |
-| `bash scripts/run-benchmark.sh` | 11 条自检断言全部通过，报告生成 |
+| `JAVA_HOME=<JDK21> mvnw.cmd -B clean test`（server，Windows） | 34 个测试类、111 个用例、0 失败、1 跳过 |
+| `bash scripts/run-benchmark.sh` | 12 条自检断言全部通过，报告生成 |
 | `npm test`（client，等价 `node --test src/*.test.js`） | 33 个前端用例全部通过 |
-| `node --test test/*.test.js`（mcp） | 52 个用例全部通过，无需后端 |
+| `node --test test/*.test.js`（mcp） | 57 个用例全部通过，无需后端 |
 | `javac --release 21` 单独编译 `core/` | 退出码 0（证明零框架依赖） |
 | `bash scripts/smoke-test.sh` | 需要真实中间件 + API Key + 可分析的视频链接；缺依赖时按设计跳过 |
 

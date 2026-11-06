@@ -37,6 +37,11 @@
 | `AGENT_MAX_ESTIMATED_TOKENS` | `200000` | 单任务 token 预算 |
 | `LLM_MODEL` | `deepseek-ai/DeepSeek-V3.2` | Executor 质量的主要来源，换小模型会降质量 |
 | `ASR_MODEL` | `Qwen/Qwen3-ASR-1.7B` | 识别准确率决定证据能否通过校验 |
+| `SCENEMIND_FRAME_MODE` | `auto` | `auto` / `scene` / `dense`；课程/PPT 建议 `dense`，对谈建议 `scene` |
+| `SCENEMIND_FRAME_DENSE_INTERVAL_SECONDS` | `8` | dense 模式采样间隔；越小越不容易漏 PPT 渐进变化，但候选帧更多 |
+| `SCENEMIND_FRAME_MAX_FRAMES` | `60` | 最多保留帧数；dense 超过上限时按变化比例/MAE 择优，再按时间排序 |
+
+> dense 模式会先产出更多候选帧，磁盘和 CPU 略增；但真正送 OCR 的帧数仍由 `MAX_FRAMES` 限制，不会线性放大 OCR 调用。
 
 ## 4. 下一步可做（仍不影响总结质量）
 

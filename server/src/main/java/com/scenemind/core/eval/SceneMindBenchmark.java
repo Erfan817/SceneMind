@@ -44,6 +44,7 @@ public final class SceneMindBenchmark {
         TopKPolicy policy = policyFromEnvironment();
         OfflineEvaluator.Report report = OfflineEvaluator.evaluate(config, policy);
         List<CheckResult> evidenceChecks = evidenceRegression();
+        CitationMetrics citation = citationRegression();
         TopKPolicy.Decision topKDecision = topKExample(policy);
 
         List<String> assertions = new ArrayList<>();
@@ -61,6 +62,8 @@ public final class SceneMindBenchmark {
                 "证据校验黄金用例全部通过");
         check(assertions, conflictDetected(),
                 "音画冲突被显式识别");
+        check(assertions, citation.f1() >= 0.75,
+                "引用质量 CiteF1 不低于 0.75");
         check(assertions, topKDecision.action() == TopKPolicy.Action.EXPAND,
                 "弱证据场景触发自适应扩召回");
         // 绝对阈值：相对断言（hybrid >= baseline）挡不住「两边一起变差」，
@@ -72,7 +75,7 @@ public final class SceneMindBenchmark {
         check(assertions, report.hybrid().redundancyRate() <= 0.20,
                 "融合检索冗余率绝对值不高于 0.20");
 
-        String markdown = render(report, evidenceChecks, topKDecision, assertions);
+        String markdown = render(report, evidenceChecks, citation, topKDecision, assertions);
         System.out.println(markdown);
 
         String out = argument(args, "--out");
@@ -147,6 +150,30 @@ public final class SceneMindBenchmark {
         EvidenceCorpus conflict = corpus(new EvidenceSegment(60_000, 120_000,
                 "我们计划八月一日正式上线。", List.of("正式上线：8月3日")));
         return new ConflictDetector().detect(conflict).hasConflict();
+    }
+
+    /**
+     * 引用质量自检：CiteP=引用可核验率、CiteR=结论有出处率、CiteF1 为调和平均。
+     * 故意留一条「编造来源」结论，验证指标不会把幻觉误报成满分。
+     */
+    private static CitationMetrics citationRegression() {
+        EvidenceCorpus corpus = new EvidenceCorpus(List.of(
+                new EvidenceSegment(0, 60_000,
+                        "我们计划八月一日正式上线。", List.of("正式上线：8月3日")),
+                new EvidenceSegment(60_000, 120_000,
+                        "前序遍历先访问根节点，然后递归访问左子树。",
+                        List.of("前序遍历：根节点、左子树、右子树")),
+                new EvidenceSegment(120_000, 180_000,
+                        "构建命令是 npm run build。", List.of("npm run build"))));
+        return CitationMetrics.evaluate(corpus, List.of(
+                new CitationMetrics.Claim("c1", "上线日期",
+                        List.of(new CitationMetrics.Citation(10_000, "ASR", "八月一日"))),
+                new CitationMetrics.Claim("c2", "前序遍历顺序",
+                        List.of(new CitationMetrics.Citation(70_000, "OCR", "根节点、左子树、右子树"))),
+                new CitationMetrics.Claim("c3", "构建命令",
+                        List.of(new CitationMetrics.Citation(130_000, "ASR", "npm run build"))),
+                new CitationMetrics.Claim("c4", "负责人",
+                        List.of(new CitationMetrics.Citation(20_000, "ASR", "李四")))));
     }
 
     /**
@@ -227,6 +254,7 @@ public final class SceneMindBenchmark {
 
     private static String render(OfflineEvaluator.Report report,
                                  List<CheckResult> checks,
+                                 CitationMetrics citation,
                                  TopKPolicy.Decision decision,
                                  List<String> assertions) {
         StringBuilder sb = new StringBuilder();
@@ -274,7 +302,21 @@ public final class SceneMindBenchmark {
                 .append(conflictDetected() ? "已识别（语音 8月1日 / 画面 8月3日）" : "未识别")
                 .append("\n\n");
 
-        sb.append("## 3. 自适应召回预算\n\n");
+        sb.append("## 3. 引用质量自检（CiteP / CiteR / CiteF1）\n\n");
+        sb.append("> 引用指标把「每条结论都能回到原始时间戳」变成可计算的数字：")
+                .append("CiteP 是被引用证据中通过逐字核验的比例，CiteR 是结论中至少有一条有效引用的比例，")
+                .append("CiteF1 是二者的调和平均。数据集为合成自检，故意包含一条编造来源，")
+                .append("验证指标不会把幻觉误报成满分。\n\n");
+        sb.append(String.format(Locale.ROOT,
+                "| 指标 | 数值 |\n| --- | ---: |\n"
+                        + "| 引用总数 | %d |\n| 可核验引用（CiteP 分子） | %d |\n"
+                        + "| 结论总数 | %d |\n| 有出处结论（CiteR 分子） | %d |\n"
+                        + "| **CiteP** | **%.3f** |\n| **CiteR** | **%.3f** |\n| **CiteF1** | **%.3f** |\n\n",
+                citation.evidenceTotal(), citation.evidenceSupported(),
+                citation.claimTotal(), citation.claimSupported(),
+                citation.precision(), citation.recall(), citation.f1()));
+
+        sb.append("## 4. 自适应召回预算\n\n");
         sb.append(String.format(Locale.ROOT,
                 "- 本次 A/B 链路决策：`%s`（TopK=%d），理由：%s\n",
                 report.decision().action(), report.decision().topK(), report.decision().reason()));
@@ -282,7 +324,7 @@ public final class SceneMindBenchmark {
                 "- 弱证据样例决策：`%s`（TopK=%d），理由：%s\n\n",
                 decision.action(), decision.topK(), decision.reason()));
 
-        sb.append("## 4. 生效策略配置\n\n");
+        sb.append("## 5. 生效策略配置\n\n");
         sb.append("> 本节由环境变量实时生成。修改 `SCENEMIND_*` 后重跑评测，本节与指标都会变化，")
                 .append("CI 的 `git diff --exit-code` 会要求同步提交报告，因此配置变更同样受门禁约束。\n\n");
         sb.append(String.format(Locale.ROOT,
@@ -298,7 +340,7 @@ public final class SceneMindBenchmark {
         sb.append("- TopKPolicy：`SCENEMIND_MIN_K` / `SCENEMIND_MAX_K` / `SCENEMIND_MIN_CHANNELS`")
                 .append("（默认 3 / 12 / 2），平台阈值 0.08 / 0.50 与线上 `RankingConfiguration` 一致\n\n");
 
-        sb.append("## 5. 自检断言\n\n");
+        sb.append("## 6. 自检断言\n\n");
         assertions.forEach(line -> sb.append("- ").append(line).append('\n'));
         sb.append("\n---\n\n复现命令：\n\n```bash\n")
                 .append("bash scripts/run-benchmark.sh\n```\n");

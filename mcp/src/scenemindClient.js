@@ -12,6 +12,9 @@
  *   GET  /analysis/agent-trace   (?id&goal&mode)             -> retrieval diagnostics map
  *   GET  /analysis/evidence-search(?id&query)                -> List<VideoEvidenceHit>
  *   POST /analysis/follow-up     (?id&question&goal&mode)     -> Result<String>
+ *   GET  /analysis/frame         (?id&timestampMs)            -> Result<FrameView>
+ *   GET  /analysis/transcript    (?id&startMs&endMs)          -> Result<List<TranscriptView>>
+ *   GET  /analysis/timeline      (?id)                        -> Result<TimelineView>
  *
  * All protected endpoints require `Authorization: Bearer <token>` (see
  * AuthInterceptor / AuthService.bearerToken). The token is either supplied via
@@ -157,6 +160,36 @@ export class SceneMindClient {
     return res.data == null ? '' : JSON.stringify(res.data);
   }
 
+  /** GET /analysis/frame -> Result<FrameView>.data */
+  async frameView(mediaId, timestampMs) {
+    if (this.demo) return demo.frameView(timestampMs);
+    const res = await this.call({
+      path: '/analysis/frame',
+      query: { id: mediaId, timestampMs },
+    });
+    return res.data == null ? null : res.data;
+  }
+
+  /** GET /analysis/transcript -> Result<List<TranscriptView>>.data */
+  async transcriptRange(mediaId, startMs, endMs) {
+    if (this.demo) return demo.transcript(startMs, endMs);
+    const res = await this.call({
+      path: '/analysis/transcript',
+      query: { id: mediaId, startMs, endMs },
+    });
+    return Array.isArray(res.data) ? res.data : [];
+  }
+
+  /** GET /analysis/timeline -> Result<TimelineView>.data */
+  async timeline(mediaId) {
+    if (this.demo) return demo.timeline();
+    const res = await this.call({
+      path: '/analysis/timeline',
+      query: { id: mediaId },
+    });
+    return res.data == null ? null : res.data;
+  }
+
   // ---- aggregation -------------------------------------------------------
 
   /**
@@ -295,6 +328,9 @@ const AGGREGATE_KEYS = [
   'timestampCoverageRate',
   'evidenceSupportRate',
   'claimEvidenceSupportRate',
+  'citationPrecision',
+  'citationRecall',
+  'citationF1',
   'criticPassed',
   'evidenceRedundancyRate',
   'temporalSpread',

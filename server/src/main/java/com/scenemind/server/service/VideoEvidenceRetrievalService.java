@@ -36,6 +36,9 @@ public class VideoEvidenceRetrievalService {
 
     private static final Logger log = LoggerFactory.getLogger(VideoEvidenceRetrievalService.class);
     private static final int VECTOR_RECALL_LIMIT = 6;
+    private static final int SEGMENT_VECTOR_RECALL_LIMIT = 24;
+    private static final int SEGMENT_EMBEDDING_BATCH_SIZE = 16;
+    private static final int MAX_SEGMENT_EMBEDDING_CHARS = 2_000;
     private static final int MAX_USER_HITS = 8;
     private static final int MAX_SNIPPET_LENGTH = 180;
 
@@ -82,26 +85,39 @@ public class VideoEvidenceRetrievalService {
         VideoRetrievalIntent intent = retrievalIntent(goal);
         List<Double> queryEmbedding = embed(intent.semanticQuery());
         Map<String, Double> vectorScores = vectorScores(mediaId, queryEmbedding);
+        // 分段级语义：Qdrant 可用时优先用 segment 命中，缺失时回退到 chunk 分数。
+        // 这样 5 分钟 chunk 内的 5 个 60s 片段不再共享同一个语义名次。
+        Map<String, Double> segmentScores = segmentVectorScores(mediaId, queryEmbedding);
 
         // 1. 把 Spring DTO 适配成内核 Candidate：一个原始片段一条证据。
         Map<String, VideoContext.VideoSegment> segmentsById = new LinkedHashMap<>();
         List<Candidate> candidates = new ArrayList<>();
+        int captionSegments = 0;
         for (VideoChunk chunk : safeChunks) {
-            double semanticScore = semanticScore(intent, queryEmbedding, vectorScores, chunk);
+            double chunkSemanticScore = chunkSemanticScore(intent, queryEmbedding, vectorScores, chunk);
             for (VideoContext.VideoSegment segment : chunk.rawSegments()) {
                 String id = segment.startMs() + ":" + segment.endMs();
                 String ocr = String.join(" ", normalizedOcrTexts(segment));
+                String captions = String.join(" ", normalizedCaptions(segment));
+                double semanticScore = segmentScores.getOrDefault(id, chunkSemanticScore);
                 double lexicalScore = termScore(intent.keywords(), segment.transcript());
-                double visualScore = termScore(intent.visualKeywords(), ocr);
+                // 视觉通道 = OCR 关键词命中 与 关键帧 VLM 描述命中 取大：
+                // 画面里没有文字但 VLM 描述出了主体/动作/图表时，片段仍能借到视觉通道名次。
+                double ocrScore = termScore(intent.visualKeywords(), ocr);
+                double captionScore = Math.max(
+                        termScore(intent.visualKeywords(), captions),
+                        termScore(intent.keywords(), captions));
+                double visualScore = Math.max(ocrScore, captionScore);
                 List<RetrievalChannel> present = new ArrayList<>();
                 if (!segment.transcript().isBlank()) {
                     present.add(RetrievalChannel.SEMANTIC);
                     present.add(RetrievalChannel.LEXICAL);
                 }
-                if (!ocr.isBlank()) present.add(RetrievalChannel.VISUAL);
+                if (!ocr.isBlank() || !captions.isBlank()) present.add(RetrievalChannel.VISUAL);
+                if (!captions.isBlank()) captionSegments++;
                 candidates.add(new Candidate(id, segment.startMs(), segment.endMs(),
                         semanticScore, lexicalScore, visualScore,
-                        segment.transcript() + " " + ocr, present));
+                        (segment.transcript() + " " + ocr + " " + captions).trim(), present));
                 segmentsById.putIfAbsent(id, segment);
             }
         }
@@ -127,7 +143,7 @@ public class VideoEvidenceRetrievalService {
                 ranked.diagnostics().duplicatesSuppressed());
         telemetry.valueCurrent("retrievalDynamicTopK", decision.topK());
         // 逐条可解释诊断落到 trace，供 /analysis/agent-trace 与前端调试面板消费。
-        telemetry.sectionCurrent("retrieval", retrievalDiagnostics(ranked, decision));
+        telemetry.sectionCurrent("retrieval", retrievalDiagnostics(ranked, decision, segmentScores.size(), captionSegments));
         if (log.isDebugEnabled()) {
             log.debug("retrieval decision: {} | {}", decision.reason(), ranked.diagnostics().notes());
         }
@@ -143,6 +159,15 @@ public class VideoEvidenceRetrievalService {
     }
 
     public void index(Long mediaId, List<VideoChunk> chunks) {
+        index(mediaId, chunks, List.of());
+    }
+
+    /**
+     * 同时写入 chunk 与 segment 两级向量。segment 写入失败不影响 chunk 级检索：
+     * 线上仍会回退到原来的 chunk 语义分，只是失去段级分辨率。
+     */
+    public void index(Long mediaId, List<VideoChunk> chunks,
+                      List<VideoContext.VideoSegment> segments) {
         try {
             vectorStore.upsert(mediaId, chunks);
             telemetry.incrementCurrent("vectorStoreWrites", chunks.size());
@@ -151,11 +176,44 @@ public class VideoEvidenceRetrievalService {
             telemetry.incrementCurrent("vectorStoreFallbacks", 1);
             log.warn("vector_index_failed mediaId={} chunks={}", mediaId, chunks.size(), e);
         }
+        indexSegments(mediaId, segments);
+    }
+
+    /** 把 60s 原始片段单独嵌入，供段级语义精排使用。 */
+    public void indexSegments(Long mediaId, List<VideoContext.VideoSegment> segments) {
+        if (mediaId == null || segments == null || segments.isEmpty()) return;
+        try {
+            List<VideoContext.VideoSegment> usable = segments.stream()
+                    .filter(segment -> !segmentText(segment).isBlank())
+                    .toList();
+            List<QdrantVectorStore.SegmentVector> vectors = new ArrayList<>();
+            for (int start = 0; start < usable.size(); start += SEGMENT_EMBEDDING_BATCH_SIZE) {
+                int end = Math.min(usable.size(), start + SEGMENT_EMBEDDING_BATCH_SIZE);
+                List<VideoContext.VideoSegment> batch = usable.subList(start, end);
+                List<List<Double>> embeddings = embeddingUtils.embedBatch(
+                        batch.stream().map(this::segmentText).toList());
+                for (int i = 0; i < batch.size() && i < embeddings.size(); i++) {
+                    List<Double> embedding = embeddings.get(i);
+                    if (embedding.isEmpty()) continue;
+                    VideoContext.VideoSegment segment = batch.get(i);
+                    vectors.add(new QdrantVectorStore.SegmentVector(
+                            segment.startMs(), segment.endMs(), embedding));
+                }
+            }
+            if (vectors.isEmpty()) return;
+            vectorStore.upsertSegments(mediaId, vectors);
+            telemetry.incrementCurrent("segmentVectorWrites", vectors.size());
+        } catch (RuntimeException e) {
+            telemetry.incrementCurrent("segmentVectorFallbacks", 1);
+            log.warn("segment_vector_index_failed mediaId={} segments={}", mediaId, segments.size(), e);
+        }
     }
 
     /** 把 RankingResult 的逐条依据转换成可 JSON 化的诊断对象。 */
     private Map<String, Object> retrievalDiagnostics(RankingResult ranked,
-                                                      TopKPolicy.Decision decision) {
+                                                      TopKPolicy.Decision decision,
+                                                      int segmentSemanticHits,
+                                                      int captionSegments) {
         // trace 会写 Redis 并保留 7 天：只存前 N 条明细，避免长视频把 trace 撑爆。
         int maxDiagnosticItems = 20;
         Map<String, Object> diagnostics = new LinkedHashMap<>();
@@ -164,6 +222,9 @@ public class VideoEvidenceRetrievalService {
         diagnostics.put("action", decision.action().name());
         diagnostics.put("reason", decision.reason());
         diagnostics.put("candidatesSeen", ranked.diagnostics().candidatesSeen());
+        diagnostics.put("segmentSemanticHits", segmentSemanticHits);
+        diagnostics.put("semanticResolution", segmentSemanticHits > 0 ? "segment" : "chunk");
+        diagnostics.put("captionSegments", captionSegments);
         diagnostics.put("duplicatesSuppressed", ranked.diagnostics().duplicatesSuppressed());
         diagnostics.put("windowsCovered", ranked.diagnostics().windowsCovered());
         diagnostics.put("secondPassFills", ranked.diagnostics().secondPassFills());
@@ -186,14 +247,37 @@ public class VideoEvidenceRetrievalService {
         return diagnostics;
     }
 
-    private double semanticScore(VideoRetrievalIntent intent,
-                                 List<Double> queryEmbedding,
-                                 Map<String, Double> vectorScores,
-                                 VideoChunk chunk) {
+    private double chunkSemanticScore(VideoRetrievalIntent intent,
+                                      List<Double> queryEmbedding,
+                                      Map<String, Double> vectorScores,
+                                      VideoChunk chunk) {
         Double remoteScore = vectorScores.get(chunkKey(chunk));
         return remoteScore == null
                 ? cosine(queryEmbedding, chunk.embedding())
                 : remoteScore;
+    }
+
+    private Map<String, Double> segmentVectorScores(Long mediaId, List<Double> queryEmbedding) {
+        Map<String, Double> scores = new LinkedHashMap<>();
+        if (mediaId == null || queryEmbedding.isEmpty()) return scores;
+        try {
+            vectorStore.searchSegments(mediaId, queryEmbedding, SEGMENT_VECTOR_RECALL_LIMIT)
+                    .forEach(hit -> scores.merge(
+                            hit.startMs() + ":" + hit.endMs(), hit.score(), Math::max));
+        } catch (RuntimeException e) {
+            telemetry.incrementCurrent("segmentVectorFallbacks", 1);
+        }
+        return scores;
+    }
+
+    private String segmentText(VideoContext.VideoSegment segment) {
+        if (segment == null) return "";
+        String text = (segment.transcript() + " "
+                + String.join(" ", normalizedOcrTexts(segment)) + " "
+                + String.join(" ", normalizedCaptions(segment))).trim();
+        return text.length() <= MAX_SEGMENT_EMBEDDING_CHARS
+                ? text
+                : text.substring(0, MAX_SEGMENT_EMBEDDING_CHARS);
     }
 
     private Map<String, Double> vectorScores(Long mediaId, List<Double> queryEmbedding) {
@@ -211,14 +295,21 @@ public class VideoEvidenceRetrievalService {
     private VideoEvidenceHit toHit(ScoredSegment result) {
         VideoContext.VideoSegment segment = result.segment();
         List<String> ocrTexts = normalizedOcrTexts(segment);
+        List<String> captions = normalizedCaptions(segment);
         boolean hasTranscript = !segment.transcript().isBlank();
         boolean hasOcr = !ocrTexts.isEmpty();
+        boolean hasCaptions = !captions.isEmpty();
+        // 来源只描述可引用证据通道：VLM 画面描述只参与召回，不能伪装成 OCR/ASR。
         String source = hasTranscript && hasOcr
                 ? "ASR+OCR"
-                : hasOcr ? "OCR" : hasTranscript ? "ASR" : "时间片段";
+                : hasOcr ? "OCR"
+                : hasTranscript ? "ASR"
+                : hasCaptions ? "VISION"
+                : "时间片段";
         String ocrText = String.join(" ", ocrTexts);
         String preferred = result.visualScore() > result.transcriptScore() ? ocrText : segment.transcript();
         if (preferred.isBlank()) preferred = hasOcr ? ocrText : segment.transcript();
+        if (preferred.isBlank() && hasCaptions) preferred = String.join(" ", captions);
         if (preferred.isBlank()) preferred = "该时间段暂无可展示文本";
         return new VideoEvidenceHit(
                 segment.startMs(),
@@ -226,11 +317,21 @@ public class VideoEvidenceRetrievalService {
                 source,
                 abbreviate(preferred),
                 segment.transcript(),
-                ocrTexts);
+                ocrTexts,
+                captions);
     }
 
     private List<String> normalizedOcrTexts(VideoContext.VideoSegment segment) {
         return segment.ocrTexts().stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(text -> !text.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private List<String> normalizedCaptions(VideoContext.VideoSegment segment) {
+        return segment.visualCaptions() == null ? List.of() : segment.visualCaptions().stream()
                 .filter(Objects::nonNull)
                 .map(String::trim)
                 .filter(text -> !text.isBlank())

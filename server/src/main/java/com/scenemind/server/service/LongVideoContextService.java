@@ -93,7 +93,8 @@ public class LongVideoContextService {
         int usedChars = 0;
         for (VideoContext.VideoSegment segment : candidates) {
             int segmentChars = segment.transcript().length()
-                    + segment.ocrTexts().stream().mapToInt(String::length).sum();
+                    + segment.ocrTexts().stream().mapToInt(String::length).sum()
+                    + segment.visualCaptions().stream().mapToInt(String::length).sum();
             if (!selected.isEmpty() && usedChars + segmentChars > MAX_CONTEXT_CHARS) continue;
             selected.add(segment);
             usedChars += segmentChars;
@@ -121,7 +122,7 @@ public class LongVideoContextService {
         chunks = chunkingService.build(segments);
         if (mediaId != null) {
             checkpointService.saveChunks(mediaId, chunks);
-            retrievalService.index(mediaId, chunks);
+            retrievalService.index(mediaId, chunks, segments);
         }
         return chunks;
     }

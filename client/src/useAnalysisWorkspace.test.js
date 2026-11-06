@@ -168,6 +168,14 @@ test('status conflicts and trace diagnostics are stored for the debug panel', as
             channelsUsed: ['SEMANTIC'],
             notes: ['覆盖 3 个时间窗'],
             items: []
+          },
+          frames: {
+            mode: 'dense',
+            candidates: 70,
+            kept: 22,
+            suppressed: 48,
+            maxFrames: 60,
+            denseIntervalSeconds: 8
           }
         }
       })
@@ -185,5 +193,7 @@ test('status conflicts and trace diagnostics are stored for the debug panel', as
   assert.equal(workspace.sidebar.value.diagnostics.retrieval.topK, 8)
   assert.equal(workspace.conflictNotices.value.length, 1)
   assert.equal(workspace.retrievalDiagnostics.value.topK, 8)
+  assert.equal(workspace.frameDiagnostics.value.mode, 'dense')
+  assert.equal(workspace.frameDiagnostics.value.kept, 22)
 })
 

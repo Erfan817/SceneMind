@@ -62,6 +62,22 @@ class AgentTelemetryTest {
     }
 
     @Test
+    void sectionByTraceIdWorksFromAnotherThread() throws Exception {
+        AgentTelemetry telemetry = telemetry();
+        String traceId = telemetry.start(13L, "goal");
+        Thread branch = new Thread(() -> telemetry.section(
+                traceId, "frames", Map.of("mode", "dense", "kept", 22)));
+        branch.start();
+        branch.join();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> trace = telemetry.latest(13L, "goal");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> diagnostics = (Map<String, Object>) trace.get("diagnostics");
+        assertEquals(Map.of("mode", "dense", "kept", 22), diagnostics.get("frames"));
+    }
+
+    @Test
     void snapshotWithoutDiagnosticsStillHasEmptySections() {
         AgentTelemetry telemetry = telemetry();
         telemetry.start(11L, "goal");

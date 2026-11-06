@@ -240,7 +240,12 @@ public class AiService {
                 TaskStage.VIDEO_CONTEXT);
         long started = System.nanoTime();
         try {
-            VideoContext context = videoContextService.build(mediaFile.getFilePath(), userGoal, traceId);
+            VideoContext context = videoContextService.build(
+                    mediaFile.getFilePath(),
+                    userGoal,
+                    traceId,
+                    mediaFile.getFilename(),
+                    mode == AnalysisMode.LEARNING);
             try {
                 checkpointService.saveContext(mediaFile.getId(), context);
             } catch (RuntimeException e) {
@@ -403,7 +408,8 @@ public class AiService {
                         segment.ocrTexts(),
                         segment.evidenceFrames().isEmpty()
                                 ? java.util.List.of()
-                                : java.util.List.of(targetSource + "#timestampMs=" + segment.startMs())))
+                                : java.util.List.of(targetSource + "#timestampMs=" + segment.startMs()),
+                        segment.visualCaptions()))
                 .toList());
     }
 
@@ -529,6 +535,10 @@ public class AiService {
             }
             if (hit.ocrTexts() != null && !hit.ocrTexts().isEmpty()) {
                 sb.append("OCR：").append(String.join(" ", hit.ocrTexts())).append("\n");
+            }
+            if (hit.visualCaptions() != null && !hit.visualCaptions().isEmpty()) {
+                sb.append("画面描述（仅召回，不可作为逐字证据）：")
+                        .append(String.join(" ", hit.visualCaptions())).append("\n");
             }
         }
         return sb.toString();

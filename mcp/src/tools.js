@@ -96,7 +96,8 @@ export const TOOL_DEFINITIONS = [
     name: 'scenemind_search_evidence',
     description:
       '按问题检索带时间戳的视频证据片段（对应 GET /analysis/evidence-search）。' +
-      '返回命中片段的 startMs/endMs、时间戳文本、来源（ASR/OCR/ASR+OCR）、snippet、transcript、ocrTexts。',
+      '返回命中片段的 startMs/endMs、时间戳文本、来源（ASR/OCR/ASR+OCR；仅有 VLM 画面描述时为 VISION，' +
+      '仅用于定位、不是可引用证据）、snippet、transcript、ocrTexts、visualCaptions。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -149,6 +150,51 @@ export const TOOL_DEFINITIONS = [
         },
       },
       required: ['mediaId', 'goal', 'evidence'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'scenemind_peek_frame',
+    description:
+      '查看视频在某一时刻的画面证据（对应 GET /analysis/frame）。返回最近关键帧的 URL 与该时刻的 ' +
+      'OCR / 转写 / 来源，供 Agent「亲眼」核验模型结论；frameUrl 是 MinIO 上的关键帧地址。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mediaId: MEDIA_ID_SCHEMA,
+        timestampMs: { type: 'integer', description: '要查看的时刻（毫秒）', minimum: 0 },
+      },
+      required: ['mediaId', 'timestampMs'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'scenemind_get_transcript',
+    description:
+      '按时间范围切出转写片段（对应 GET /analysis/transcript）。返回与 [startMs, endMs) 重叠的片段，' +
+      '每段含 transcript 与 ocrTexts；用于精确读取某几秒的语音/画面文字，而不是整段视频。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mediaId: MEDIA_ID_SCHEMA,
+        startMs: { type: 'integer', description: '起始毫秒（含）', minimum: 0 },
+        endMs: { type: 'integer', description: '结束毫秒（不含），须大于 startMs' },
+      },
+      required: ['mediaId', 'startMs', 'endMs'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'scenemind_get_timeline',
+    description:
+      '获取视频的 5 分钟章节时间轴（对应 GET /analysis/timeline）：每章返回摘要、关键词、片段数、' +
+      'OCR/画面描述覆盖数和一个代表关键帧 URL。用于先定位章节，再用 peek_frame / get_transcript 精读。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mediaId: MEDIA_ID_SCHEMA,
+      },
+      required: ['mediaId'],
       additionalProperties: false,
     },
   },
@@ -220,6 +266,20 @@ function optionalInt(args, key, min, max) {
   return value;
 }
 
+function requireInt(args, key, min, max) {
+  const value = args[key];
+  if (value === undefined || value === null || value === '') {
+    return invalid(`缺少必需参数 ${key}（非负整数）`);
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    return invalid(`参数 ${key} 必须是整数`);
+  }
+  if (value < min || value > max) {
+    return invalid(`参数 ${key} 必须在 ${min}..${max} 之间`);
+  }
+  return value;
+}
+
 function validateEvidence(args) {
   const list = args.evidence;
   if (!Array.isArray(list)) return invalid('参数 evidence 必须是数组');
@@ -280,6 +340,16 @@ function validateArgs(name, args) {
       normalized.goal = requireString(args, 'goal');
       normalized.mode = normalizeMode(args);
       normalized.evidence = validateEvidence(args);
+      break;
+    case 'scenemind_peek_frame':
+      normalized.timestampMs = requireInt(args, 'timestampMs', 0, Number.MAX_SAFE_INTEGER);
+      break;
+    case 'scenemind_get_transcript':
+      normalized.startMs = requireInt(args, 'startMs', 0, Number.MAX_SAFE_INTEGER);
+      normalized.endMs = requireInt(args, 'endMs', 0, Number.MAX_SAFE_INTEGER);
+      if (normalized.endMs <= normalized.startMs) {
+        return invalid('参数 endMs 必须大于 startMs');
+      }
       break;
     default:
       break;
@@ -418,6 +488,7 @@ async function executeTool(name, a, ctx) {
         snippet: hit.snippet ?? '',
         transcript: hit.transcript ?? '',
         ocrTexts: Array.isArray(hit.ocrTexts) ? hit.ocrTexts : [],
+        visualCaptions: Array.isArray(hit.visualCaptions) ? hit.visualCaptions : [],
       }));
       return textResult({
         mediaId: a.mediaId,
@@ -441,6 +512,78 @@ async function executeTool(name, a, ctx) {
       return textResult(
         await client.verifyEvidence(a.mediaId, a.goal, a.evidence, a.mode),
       );
+    case 'scenemind_peek_frame': {
+      const view = await client.frameView(a.mediaId, a.timestampMs);
+      if (!view) {
+        return textResult({
+          mediaId: a.mediaId,
+          timestampMs: a.timestampMs,
+          message: '平台没有返回该时刻的画面证据（可能视频上下文尚未就绪）。',
+        });
+      }
+      return textResult({
+        mediaId: a.mediaId,
+        timestampMs: a.timestampMs,
+        startMs: view.startMs,
+        endMs: view.endMs,
+        source: view.source ?? '',
+        frameUrl: view.frameUrl ?? '',
+        transcript: view.transcript ?? '',
+        ocrTexts: Array.isArray(view.ocrTexts) ? view.ocrTexts : [],
+        message:
+          '返回最近关键帧 URL 与该时刻的 OCR / 转写；frameUrl 指向 MinIO 关键帧，' +
+          '可据此亲眼核对模型结论是否与画面一致。',
+      });
+    }
+    case 'scenemind_get_transcript': {
+      const views = await client.transcriptRange(a.mediaId, a.startMs, a.endMs);
+      const mapped = (Array.isArray(views) ? views : []).map((v) => ({
+        startMs: v.startMs,
+        endMs: v.endMs,
+        timestampLabel: `${formatTimestamp(v.startMs)}-${formatTimestamp(v.endMs)}`,
+        transcript: v.transcript ?? '',
+        ocrTexts: Array.isArray(v.ocrTexts) ? v.ocrTexts : [],
+      }));
+      return textResult({
+        mediaId: a.mediaId,
+        startMs: a.startMs,
+        endMs: a.endMs,
+        count: mapped.length,
+        message: mapped.length
+          ? '返回与时间范围重叠的转写片段。'
+          : '该时间范围内没有转写片段。',
+        segments: mapped,
+      });
+    }
+    case 'scenemind_get_timeline': {
+      const view = await client.timeline(a.mediaId);
+      if (!view) {
+        return textResult({
+          mediaId: a.mediaId,
+          message: '平台没有返回时间轴（可能视频上下文尚未就绪）。',
+        });
+      }
+      const entries = (Array.isArray(view.entries) ? view.entries : []).map((entry) => ({
+        startMs: entry.startMs,
+        endMs: entry.endMs,
+        timestampLabel: `${formatTimestamp(entry.startMs)}-${formatTimestamp(entry.endMs)}`,
+        summary: entry.summary ?? '',
+        keywords: Array.isArray(entry.keywords) ? entry.keywords : [],
+        segmentCount: entry.segmentCount ?? 0,
+        ocrSegmentCount: entry.ocrSegmentCount ?? 0,
+        captionSegmentCount: entry.captionSegmentCount ?? 0,
+        frameUrl: entry.frameUrl ?? '',
+      }));
+      return textResult({
+        mediaId: a.mediaId,
+        durationMs: view.durationMs ?? 0,
+        count: entries.length,
+        message: entries.length
+          ? '按 5 分钟章节返回时间轴；可对某章调用 peek_frame / get_transcript 精读。'
+          : '视频上下文没有可用的时间轴条目。',
+        entries,
+      });
+    }
     default:
       return textResult({ error: 'unreachable' }, true);
   }

@@ -13,7 +13,7 @@
 
 ```bash
 cd mcp
-node --test test/*.test.js        # 52 个测试，全部内置，无需后端
+node --test test/*.test.js        # 57 个测试，全部内置，无需后端
 SCENEMIND_DEMO=1 node src/server.js       # stdio：手工喂一行 initialize
 SCENEMIND_MCP_TOKEN=xxx SCENEMIND_DEMO=1 node src/httpServer.js  # HTTP：POST /mcp
 ```
@@ -142,6 +142,9 @@ curl -s -X POST https://your-host/mcp \
 | `scenemind_search_evidence` | `{mediaId, query}` | `GET /analysis/evidence-search` | 带时间戳的命中片段（startMs/endMs、来源、snippet、transcript、ocrTexts） |
 | `scenemind_ask_followup` | `{mediaId, question, goal?, mode?}` | `POST /analysis/follow-up` | 追问答案文本 |
 | `scenemind_verify_evidence` | `{mediaId, goal, evidence:[{timestampMs,source,content}], mode?}` | `agent-evaluation` + `agent-trace` | 「每条证据是否可核验」的**客户端判定说明**：如实基于平台已有校验信号，不重新实现伪校验；若后端提供结构化 `evidenceAudit` 则直接采用 |
+| `scenemind_peek_frame` | `{mediaId, timestampMs}` | `GET /analysis/frame` | 某时刻的画面证据：最近关键帧 URL + 该时刻 OCR / 转写 / 来源，供 Agent「亲眼」核验模型结论 |
+| `scenemind_get_transcript` | `{mediaId, startMs, endMs}` | `GET /analysis/transcript` | 按时间范围切出转写片段（每段含 transcript 与 ocrTexts），精确读取某几秒而不是整段 |
+| `scenemind_get_timeline` | `{mediaId}` | `GET /analysis/timeline` | 5 分钟章节摘要、关键词、片段/OCR/画面描述覆盖数与代表关键帧，用于先定位章节 |
 
 `mode` 取值：`GENERAL` / `LEARNING` / `REVIEW` / `CREATION`，缺省 `GENERAL`。`goal` 与 `mode` 共同构成后端任务身份 key，`submit → analyze → get_result/wait` 必须传一致的值。
 

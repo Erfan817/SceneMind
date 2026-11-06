@@ -64,9 +64,9 @@ test('notifications/initialized produces no response', async () => {
   assert.equal(afterCount - beforeCount, 1); // only the ping reply
 });
 
-test('tools/list exposes the 7 scenemind_ tools', async () => {
+test('tools/list exposes the 10 scenemind_ tools', async () => {
   const resp = await rpc.request('tools/list', {});
-  assert.equal(resp.result.tools.length, 7);
+  assert.equal(resp.result.tools.length, 10);
   assert.ok(resp.result.tools.every((t) => t.name.startsWith('scenemind_')));
   assert.ok(resp.result.tools.every((t) => t.inputSchema && t.inputSchema.type === 'object'));
 });
@@ -253,6 +253,67 @@ test('scenemind_verify_evidence relays platform signals without fake re-verifica
   const evalReq = fake.state.requests.find((r) => r.path === '/analysis/agent-evaluation');
   const traceReq = fake.state.requests.find((r) => r.path === '/analysis/agent-trace');
   assert.ok(evalReq && traceReq, 'reuses agent-evaluation + agent-trace');
+});
+
+test('scenemind_peek_frame returns the frame view for a timestamp', async () => {
+  fake.reset();
+  const { resp, payload } = await tool('scenemind_peek_frame', {
+    mediaId: 4242,
+    timestampMs: 627000,
+  });
+  assert.equal(resp.result.isError, undefined);
+  assert.equal(payload.timestampMs, 627000);
+  assert.equal(payload.frameUrl, 'http://minio/fake/frame_000010.jpg');
+  assert.equal(payload.source, 'ASR+OCR');
+  assert.match(payload.transcript, /显式栈/);
+  assert.deepEqual(payload.ocrTexts, ['前序遍历：根节点、左子树、右子树']);
+
+  const frame = fake.state.requests.find((r) => r.path === '/analysis/frame');
+  assert.ok(frame);
+  assert.equal(frame.query.id, '4242');
+  assert.equal(frame.query.timestampMs, '627000');
+});
+
+test('scenemind_get_transcript returns overlapping slices with labels', async () => {
+  fake.reset();
+  const { resp, payload } = await tool('scenemind_get_transcript', {
+    mediaId: 4242,
+    startMs: 520000,
+    endMs: 640000,
+  });
+  assert.equal(resp.result.isError, undefined);
+  assert.equal(payload.count, 2);
+  assert.equal(payload.segments[0].startMs, 522000);
+  assert.match(payload.segments[0].timestampLabel, /^\d{2}:\d{2}-\d{2}:\d{2}$/);
+  assert.deepEqual(payload.segments[1].ocrTexts, ['前序遍历：根节点、左子树、右子树']);
+
+  const tx = fake.state.requests.find((r) => r.path === '/analysis/transcript');
+  assert.ok(tx);
+  assert.equal(tx.query.startMs, '520000');
+  assert.equal(tx.query.endMs, '640000');
+});
+
+test('scenemind_get_timeline returns chapter summaries and labels', async () => {
+  fake.reset();
+  const { resp, payload } = await tool('scenemind_get_timeline', { mediaId: 4242 });
+  assert.equal(resp.result.isError, undefined);
+  assert.equal(payload.count, 2);
+  assert.equal(payload.durationMs, 709000);
+  assert.equal(payload.entries[0].startMs, 0);
+  assert.match(payload.entries[0].timestampLabel, /^\d{2}:\d{2}-\d{2}:\d{2}$/);
+  assert.equal(payload.entries[1].keywords[0], '递归');
+
+  const timeline = fake.state.requests.find((r) => r.path === '/analysis/timeline');
+  assert.ok(timeline);
+  assert.equal(timeline.query.id, '4242');
+});
+
+test('scenemind_get_transcript rejects endMs <= startMs with -32602', async () => {
+  const resp = await rpc.request('tools/call', {
+    name: 'scenemind_get_transcript',
+    arguments: { mediaId: 4242, startMs: 5000, endMs: 1000 },
+  });
+  assert.equal(resp.error.code, ErrorCode.INVALID_PARAMS);
 });
 
 test('resources/read report returns markdown with evidence', async () => {

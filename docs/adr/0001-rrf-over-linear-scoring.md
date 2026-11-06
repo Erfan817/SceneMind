@@ -81,4 +81,4 @@ RRF 实现上线后发现一个语义漏洞：融合时每个通道都拿到同�
 
 - `HybridRankerTest`：单调缩放不变性、通道隔离、去冗余、跨时间窗覆盖、零权重通道、外部预算、非法配置。
 - `OfflineEvaluatorTest`：RRF 稳定性恒为 1.0、线性加权 < 1.0、四项指标不退化、评测完全确定。
-- `bash scripts/run-benchmark.sh` → `docs/benchmark-report.md`，11 条自检断言，CI 做报告 diff 门禁。
+- `bash scripts/run-benchmark.sh` → `docs/benchmark-report.md`，12 条自检断言，CI 做报告 diff 门禁。

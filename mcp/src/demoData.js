@@ -80,6 +80,9 @@ export function evaluation() {
     timestampCoverageRate: 1.0,
     evidenceSupportRate: 0.92,
     claimEvidenceSupportRate: 0.9,
+    citationPrecision: 0.92,
+    citationRecall: 0.9,
+    citationF1: 0.909,
     criticPassed: false, // a conflict was flagged, so Critic did not fully pass
     evidenceRedundancyRate: 0.0,
     temporalSpread: 0.75,
@@ -158,4 +161,76 @@ export function followUp(question) {
     '平台不做猜测，建议以书面/OCR 材料为准并人工核实。',
     '相关证据时间戳：08:42（ASR）、08:45（OCR）。',
   ].join('');
+}
+
+/** GET /analysis/frame -> Result<FrameView>.data */
+export function frameView(timestampMs) {
+  const ms = Number(timestampMs);
+  return {
+    timestampMs: ms,
+    startMs: Math.floor(ms / 60_000) * 60_000,
+    endMs: Math.floor(ms / 60_000) * 60_000 + 60_000,
+    frameUrl: 'http://127.0.0.1:9000/demo/frame_000007.jpg',
+    ocrTexts: ['前序遍历：根节点、左子树、右子树'],
+    transcript: '迭代遍历使用显式栈保存待访问节点。',
+    source: 'ASR+OCR',
+  };
+}
+
+/** GET /analysis/timeline -> Result<TimelineView>.data */
+export function timeline() {
+  return {
+    mediaId: 1,
+    durationMs: 709000,
+    entries: [
+      {
+        startMs: 0,
+        endMs: 300000,
+        summary: '课程导入与前序遍历的定义，包含白板示意。',
+        keywords: ['前序遍历', '定义'],
+        segmentCount: 5,
+        ocrSegmentCount: 3,
+        captionSegmentCount: 2,
+        frameUrl: 'http://127.0.0.1:9000/demo/frame_000001.jpg',
+      },
+      {
+        startMs: 300000,
+        endMs: 600000,
+        summary: '递归实现与迭代实现的对比，演示调用栈变化。',
+        keywords: ['递归', '迭代', '调用栈'],
+        segmentCount: 5,
+        ocrSegmentCount: 4,
+        captionSegmentCount: 2,
+        frameUrl: 'http://127.0.0.1:9000/demo/frame_000007.jpg',
+      },
+      {
+        startMs: 600000,
+        endMs: 709000,
+        summary: '上线日期出现音画冲突：口播 8月1日 / 画面 OCR 8月3日。',
+        keywords: ['上线日期', '冲突'],
+        segmentCount: 2,
+        ocrSegmentCount: 1,
+        captionSegmentCount: 1,
+        frameUrl: 'http://127.0.0.1:9000/demo/frame_000012.jpg',
+      },
+    ],
+  };
+}
+
+/** GET /analysis/transcript -> Result<List<TranscriptView>>.data */
+export function transcript(startMs, endMs) {
+  const start = Number(startMs);
+  const end = Number(endMs);
+  const views = [
+    { startMs: 522000, endMs: 582000, transcript: '新功能将于八月一日正式上线。', ocrTexts: ['上线时间：8月3日'] },
+    { startMs: 627000, endMs: 687000, transcript: '迭代遍历使用显式栈保存待访问节点。', ocrTexts: ['前序遍历：根节点、左子树、右子树'] },
+  ];
+  return views
+    .filter((v) => v.endMs > start && v.startMs < end)
+    .map((v) => ({
+      startMs: Math.max(start, v.startMs),
+      endMs: Math.min(end, v.endMs),
+      transcript: v.transcript,
+      ocrTexts: v.ocrTexts,
+    }));
 }

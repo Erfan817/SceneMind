@@ -1,5 +1,11 @@
 package com.scenemind.server.service;
 
+import com.scenemind.core.frame.DenseFrameSelector;
+import com.scenemind.core.frame.FrameMode;
+import com.scenemind.core.frame.FrameModeResolver;
+import com.scenemind.core.frame.FrameSample;
+import com.scenemind.core.frame.FrameSelectionConfig;
+import com.scenemind.core.frame.FrameSignature;
 import com.scenemind.server.dto.VideoContext;
 import com.scenemind.server.dto.TranscriptSegment;
 import com.scenemind.server.utils.MinioUtils;
@@ -7,6 +13,7 @@ import com.scenemind.server.utils.OcrUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 
@@ -19,8 +26,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -41,6 +51,7 @@ public class VideoContextService {
     private static final String EVIDENCE_OBJECT_PREFIX = "evidence-frames";
     private static final long SEGMENT_MS = 60_000L;
     private static final long FALLBACK_FRAME_INTERVAL_MS = 30_000L;
+    private static final int FRAME_SIGNATURE_SIZE = 64;
     private static final Pattern PTS_TIME = Pattern.compile("pts_time:([0-9.]+)");
 
     private final SegmentedTranscriptionService transcriptionService;
@@ -49,26 +60,55 @@ public class VideoContextService {
     private final ThreadPoolTaskExecutor asrExecutor;
     private final ThreadPoolTaskExecutor ocrExecutor;
     private final AgentTelemetry telemetry;
+    private final FrameSelectionConfig frameSelectionConfig;
+    private final VisualCaptionService visualCaptionService;
+    private final int visionMaxFrames;
+    private final FrameModeResolver frameModeResolver = new FrameModeResolver();
+    private final DenseFrameSelector denseFrameSelector = new DenseFrameSelector();
 
     public VideoContextService(SegmentedTranscriptionService transcriptionService,
                                OcrUtils ocrUtils,
                                MinioUtils minioUtils,
                                @Qualifier("asrExecutor") ThreadPoolTaskExecutor asrExecutor,
                                @Qualifier("ocrExecutor") ThreadPoolTaskExecutor ocrExecutor,
-                               AgentTelemetry telemetry) {
+                               AgentTelemetry telemetry,
+                               FrameSelectionConfig frameSelectionConfig,
+                               VisualCaptionService visualCaptionService,
+                               @Value("${scenemind.vision.max-frames:12}") int visionMaxFrames) {
         this.transcriptionService = transcriptionService;
         this.ocrUtils = ocrUtils;
         this.minioUtils = minioUtils;
         this.asrExecutor = asrExecutor;
         this.ocrExecutor = ocrExecutor;
         this.telemetry = telemetry;
+        this.frameSelectionConfig = frameSelectionConfig == null
+                ? FrameSelectionConfig.defaults()
+                : frameSelectionConfig;
+        this.visualCaptionService = visualCaptionService == null
+                ? new VisualCaptionService(false, null, null, null)
+                : visualCaptionService;
+        this.visionMaxFrames = Math.max(0, visionMaxFrames);
     }
 
     public VideoContext build(String videoPath, String userGoal) {
-        return build(videoPath, userGoal, null);
+        return build(videoPath, userGoal, null, null, false);
     }
 
     public VideoContext build(String videoPath, String userGoal, String traceId) {
+        return build(videoPath, userGoal, traceId, null, false);
+    }
+
+    /**
+     * @param contentTitle  视频标题/文件名，用于 auto 模式下识别课程/PPT 类内容
+     * @param learningIntent 是否处于学习模式；学习模式即使标题没有关键词也优先 dense
+     */
+    public VideoContext build(String videoPath,
+                              String userGoal,
+                              String traceId,
+                              String contentTitle,
+                              boolean learningIntent) {
+        FrameMode frameMode = frameModeResolver.resolve(
+                frameSelectionConfig.mode(), learningIntent, contentTitle, userGoal);
         String readableVideoPath = minioUtils.readableSource(videoPath);
         Path workDir = Path.of(System.getProperty("java.io.tmpdir"), "video-context-" + UUID.randomUUID());
         List<String> uploadedEvidenceFrames = new CopyOnWriteArrayList<>();
@@ -86,7 +126,7 @@ public class VideoContextService {
                     ocrExecutor,
                     branchesFinished,
                     () -> extractKeyFrames(
-                            readableVideoPath, workDir.resolve("frames"), traceId, uploadedEvidenceFrames));
+                            readableVideoPath, workDir.resolve("frames"), traceId, uploadedEvidenceFrames, frameMode));
             try {
                 long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(60);
                 BranchResult<TranscriptSegment> transcriptResult = awaitBranch(transcriptFuture, deadline);
@@ -206,10 +246,14 @@ public class VideoContextService {
     private List<FramePart> extractKeyFrames(String videoPath,
                                              Path frameDir,
                                              String traceId,
-                                             List<String> uploadedEvidenceFrames) throws Exception {
+                                             List<String> uploadedEvidenceFrames,
+                                             FrameMode frameMode) throws Exception {
         Files.createDirectories(frameDir);
         List<Long> timestamps = new ArrayList<>();
-        String filter = "select=eq(n\\,0)+gt(scene\\,0.35)+gte(t-prev_selected_t\\,30),showinfo";
+        String filter = frameMode == FrameMode.DENSE
+                // dense：固定间隔采样，交给下面的纯函数按 MAE/变化像素比例二次筛选。
+                ? "fps=1/" + frameSelectionConfig.denseIntervalSeconds() + ",showinfo"
+                : "select=eq(n\\,0)+gt(scene\\,0.35)+gte(t-prev_selected_t\\,30),showinfo";
         String outputPattern = frameDir.resolve("frame_%06d.jpg").toString();
         try {
             runCommand(List.of(
@@ -238,46 +282,176 @@ public class VideoContextService {
             frameFiles = paths.filter(Files::isRegularFile).sorted().toList();
         }
 
-        List<FramePart> result = new ArrayList<>();
-        Long previousHash = null;
-        int failedFrames = 0;
+        List<FrameFile> candidates = new ArrayList<>();
         for (int i = 0; i < frameFiles.size(); i++) {
-            long imageHash = differenceHash(frameFiles.get(i).toFile());
-            if (previousHash != null && Long.bitCount(previousHash ^ imageHash) <= 5) {
-                continue;
-            }
-            previousHash = imageHash;
             long timestampMs = i < timestamps.size() ? timestamps.get(i) : i * FALLBACK_FRAME_INTERVAL_MS;
+            candidates.add(new FrameFile(frameFiles.get(i), timestampMs));
+        }
+
+        List<FrameFile> selected = frameMode == FrameMode.DENSE
+                ? selectDenseFrames(candidates, traceId)
+                : dedupeSceneFrames(candidates, traceId);
+
+        List<FramePart> result = new ArrayList<>();
+        int failedFrames = 0;
+        // 视觉描述只做召回，但逐帧串行调用 VLM 会把 OCR 分支拖长；按预算均匀抽样，
+        // 默认最多 12 帧，既覆盖整条视频又避免 60 帧 × 单次超时。
+        boolean captionEnabled = visualCaptionService.enabled();
+        int captionStride = selected.isEmpty() || visionMaxFrames == 0 || visionMaxFrames >= selected.size()
+                ? 1
+                : (int) Math.ceil((double) selected.size() / visionMaxFrames);
+        for (int frameIndex = 0; frameIndex < selected.size(); frameIndex++) {
+            FrameFile candidate = selected.get(frameIndex);
             String ocrText;
             try {
                 telemetry.increment(traceId, "ocrCalls", 1);
-                ocrText = ocrUtils.recognize(frameFiles.get(i).toFile());
+                ocrText = ocrUtils.recognize(candidate.path().toFile());
             } catch (RuntimeException e) {
                 failedFrames++;
                 telemetry.increment(traceId, "ocrFrameFailures", 1);
                 log.warn("ocr_frame_failed frame={} timestampMs={}",
-                        frameFiles.get(i).getFileName(), timestampMs, e);
+                        candidate.path().getFileName(), candidate.timestampMs(), e);
                 continue;
             }
             String frameUrl;
             try {
                 frameUrl = minioUtils.uploadLocalFile(
-                        frameFiles.get(i).toFile(),
-                        frameFiles.get(i).getFileName().toString(),
+                        candidate.path().toFile(),
+                        candidate.path().getFileName().toString(),
                         EVIDENCE_OBJECT_PREFIX);
                 uploadedEvidenceFrames.add(frameUrl);
             } catch (Exception e) {
                 telemetry.increment(traceId, "frameUploadFailures", 1);
                 log.warn("evidence_frame_upload_failed frame={} timestampMs={}",
-                        frameFiles.get(i).getFileName(), timestampMs, e);
-                frameUrl = videoPath + "#timestampMs=" + timestampMs;
+                        candidate.path().getFileName(), candidate.timestampMs(), e);
+                frameUrl = videoPath + "#timestampMs=" + candidate.timestampMs();
             }
-            result.add(new FramePart(timestampMs, ocrText, frameUrl));
+            String caption = null;
+            boolean captionWanted = captionEnabled
+                    && visionMaxFrames > 0
+                    && frameIndex % captionStride == 0;
+            if (captionWanted) {
+                try {
+                    caption = visualCaptionService.caption(candidate.path().toFile());
+                } catch (RuntimeException e) {
+                    telemetry.increment(traceId, "captionFailures", 1);
+                    log.warn("visual_caption_failed frame={} timestampMs={}",
+                            candidate.path().getFileName(), candidate.timestampMs(), e);
+                }
+                if (caption != null) {
+                    telemetry.increment(traceId, "visualCaptions", 1);
+                } else {
+                    telemetry.increment(traceId, "captionMisses", 1);
+                }
+            } else if (captionEnabled) {
+                telemetry.increment(traceId, "captionSkippedByBudget", 1);
+            }
+            result.add(new FramePart(candidate.timestampMs(), ocrText, frameUrl, caption));
         }
         if (result.isEmpty() && failedFrames > 0) {
             throw new IllegalStateException("所有 OCR 关键帧均处理失败");
         }
         return result;
+    }
+
+    /**
+     * dense 模式：先按固定间隔拿到候选帧，再用纯函数选择器按「与上一张保留帧」的
+     * MAE/变化像素比例筛选，避免 PPT 逐行出现时被场景检测漏掉。
+     */
+    private List<FrameFile> selectDenseFrames(List<FrameFile> candidates, String traceId) {
+        List<FrameFile> valid = new ArrayList<>(candidates.size());
+        List<FrameSignature> signatures = new ArrayList<>(candidates.size());
+        List<Long> timestamps = new ArrayList<>(candidates.size());
+        for (FrameFile candidate : candidates) {
+            try {
+                signatures.add(frameSignature(candidate.path().toFile()));
+                timestamps.add(candidate.timestampMs());
+                valid.add(candidate);
+            } catch (Exception e) {
+                // 单帧损坏不应拖垮整条 OCR 分支：跳过并继续处理其余候选帧。
+                log.warn("dense_frame_decode_failed path={}", candidate.path(), e);
+                deleteQuietly(candidate.path());
+            }
+        }
+        if (valid.isEmpty()) {
+            reportFrameDiagnostics(traceId, FrameMode.DENSE, candidates.size(), 0);
+            return List.of();
+        }
+
+        List<FrameSample> kept = denseFrameSelector.select(signatures, timestamps, frameSelectionConfig);
+        Set<Integer> keptOrdinals = new HashSet<>();
+        for (FrameSample sample : kept) keptOrdinals.add(sample.ordinal());
+        for (int i = 0; i < valid.size(); i++) {
+            if (keptOrdinals.contains(i)) continue;
+            deleteQuietly(valid.get(i).path());
+        }
+        reportFrameDiagnostics(traceId, FrameMode.DENSE, candidates.size(), kept.size());
+        return kept.stream().map(sample -> valid.get(sample.ordinal())).toList();
+    }
+
+    private void deleteQuietly(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (Exception e) {
+            log.warn("dense_frame_cleanup_failed path={}", path, e);
+        }
+    }
+
+    /** scene 模式：保留原有 dHash 去重，只把候选/保留数量写进 trace。 */
+    private List<FrameFile> dedupeSceneFrames(List<FrameFile> candidates, String traceId) throws Exception {
+        List<FrameFile> kept = new ArrayList<>();
+        Long previousHash = null;
+        for (FrameFile candidate : candidates) {
+            long imageHash = differenceHash(candidate.path().toFile());
+            if (previousHash != null && Long.bitCount(previousHash ^ imageHash) <= 5) {
+                continue;
+            }
+            previousHash = imageHash;
+            kept.add(candidate);
+        }
+        reportFrameDiagnostics(traceId, FrameMode.SCENE, candidates.size(), kept.size());
+        return kept;
+    }
+
+    private void reportFrameDiagnostics(String traceId, FrameMode mode, int candidates, int kept) {
+        telemetry.increment(traceId, "frameCandidates", candidates);
+        telemetry.increment(traceId, "framesKept", kept);
+        telemetry.increment(traceId, "framesSuppressed", candidates - kept);
+        Map<String, Object> diagnostics = new LinkedHashMap<>();
+        diagnostics.put("mode", mode.name().toLowerCase(java.util.Locale.ROOT));
+        diagnostics.put("candidates", candidates);
+        diagnostics.put("kept", kept);
+        diagnostics.put("suppressed", candidates - kept);
+        diagnostics.put("maxFrames", frameSelectionConfig.maxFrames());
+        if (mode == FrameMode.DENSE) {
+            diagnostics.put("denseIntervalSeconds", frameSelectionConfig.denseIntervalSeconds());
+            diagnostics.put("denseMaeThreshold", frameSelectionConfig.denseMaeThreshold());
+        }
+        telemetry.section(traceId, "frames", diagnostics);
+    }
+
+    /** 把一帧降采样成 64x64 灰度签名，口径与 bvs 的 frames.py 一致。 */
+    private FrameSignature frameSignature(File imageFile) throws Exception {
+        BufferedImage source = ImageIO.read(imageFile);
+        if (source == null) {
+            throw new IllegalArgumentException("无法读取抽帧图片: " + imageFile.getName());
+        }
+        BufferedImage scaled = new BufferedImage(
+                FRAME_SIGNATURE_SIZE, FRAME_SIGNATURE_SIZE, BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D graphics = scaled.createGraphics();
+        try {
+            graphics.drawImage(source, 0, 0, FRAME_SIGNATURE_SIZE, FRAME_SIGNATURE_SIZE, null);
+        } finally {
+            graphics.dispose();
+        }
+        var raster = scaled.getRaster();
+        double[] pixels = new double[FRAME_SIGNATURE_SIZE * FRAME_SIGNATURE_SIZE];
+        for (int y = 0; y < FRAME_SIGNATURE_SIZE; y++) {
+            for (int x = 0; x < FRAME_SIGNATURE_SIZE; x++) {
+                pixels[y * FRAME_SIGNATURE_SIZE + x] = raster.getSample(x, y, 0);
+            }
+        }
+        return new FrameSignature(pixels);
     }
 
     private List<VideoContext.VideoSegment> merge(List<TranscriptSegment> transcripts, List<FramePart> frames) {
@@ -291,6 +465,9 @@ public class VideoContextService {
             SegmentBuilder segment = windows.computeIfAbsent(windowStart, SegmentBuilder::new);
             if (frame.ocrText() != null && !frame.ocrText().isBlank()) {
                 segment.ocrTexts.add(frame.ocrText());
+            }
+            if (frame.caption() != null && !frame.caption().isBlank()) {
+                segment.visualCaptions.add(frame.caption());
             }
             segment.evidenceFrames.add(frame.frameName());
         }
@@ -381,7 +558,10 @@ public class VideoContextService {
         }
     }
 
-    private record FramePart(long timestampMs, String ocrText, String frameName) {
+    private record FrameFile(Path path, long timestampMs) {
+    }
+
+    private record FramePart(long timestampMs, String ocrText, String frameName, String caption) {
     }
 
     private record BranchResult<T>(List<T> items, Exception error) {
@@ -408,6 +588,7 @@ public class VideoContextService {
         private final List<String> transcripts = new ArrayList<>();
         private final List<String> ocrTexts = new ArrayList<>();
         private final List<String> evidenceFrames = new ArrayList<>();
+        private final List<String> visualCaptions = new ArrayList<>();
 
         private SegmentBuilder(long startMs) {
             this.startMs = startMs;
@@ -419,7 +600,8 @@ public class VideoContextService {
                     startMs + SEGMENT_MS,
                     String.join("\n", transcripts),
                     ocrTexts,
-                    evidenceFrames
+                    evidenceFrames,
+                    visualCaptions
             );
         }
     }

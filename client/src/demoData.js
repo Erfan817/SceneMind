@@ -79,6 +79,14 @@ export const DEMO_DIAGNOSTICS = {
     hallucinationRejections: 1,
     notes: ['证据审计与 TaskStatus.evidenceAudit 一致']
   },
+  frames: {
+    mode: 'dense',
+    candidates: 70,
+    kept: 22,
+    suppressed: 48,
+    maxFrames: 60,
+    denseIntervalSeconds: 8
+  },
   generatedAt: '2026-07-10T14:32:00'
 }
 

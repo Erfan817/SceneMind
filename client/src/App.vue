@@ -397,7 +397,7 @@
                  </ul>
                </div>
                <div class="markdown-content" v-html="renderedMarkdown" @click="seekEvidence"></div>
-              <details v-if="sidebar.plan?.tasks?.length || traceStages.length || (sidebar.evaluation && Object.keys(sidebar.evaluation).length) || retrievalDiagnostics || evidenceAuditSummary || conflictNotices.length || evaluationSignals" class="agent-inspector">
+              <details v-if="sidebar.plan?.tasks?.length || traceStages.length || (sidebar.evaluation && Object.keys(sidebar.evaluation).length) || retrievalDiagnostics || frameDiagnostics || evidenceAuditSummary || conflictNotices.length || evaluationSignals" class="agent-inspector">
                 <summary>分析详情</summary>
                 <div class="agent-inspector-content">
                 <div v-if="sidebar.plan?.tasks?.length" class="agent-meta-block">
@@ -431,6 +431,16 @@
                   <span v-if="evaluationSignals && evaluationSignals.evidenceRedundancyRate != null">证据冗余率 {{ evaluationSignals.evidenceRedundancyRate }}</span>
                   <span v-if="evaluationSignals && evaluationSignals.temporalSpread != null">时间覆盖度 {{ evaluationSignals.temporalSpread }}</span>
                   <span v-if="evaluationSignals && evaluationSignals.conflictFlagged != null">冲突标记 {{ evaluationSignals.conflictFlagged ? '是' : '否' }}</span>
+                </div>
+                <div v-if="frameDiagnostics" class="agent-meta-block diagnostics-block">
+                  <span class="meta-label">抽帧诊断</span>
+                  <div class="diagnostics-stats">
+                    <span>模式 {{ frameDiagnostics.mode === 'dense' ? 'dense（课程/PPT）' : (frameDiagnostics.mode || '—') }}</span>
+                    <span>候选 {{ frameDiagnostics.candidates ?? '—' }}</span>
+                    <span>保留 {{ frameDiagnostics.kept ?? '—' }}</span>
+                    <span>抑制 {{ frameDiagnostics.suppressed ?? '—' }}</span>
+                    <span v-if="frameDiagnostics.denseIntervalSeconds">采样间隔 {{ frameDiagnostics.denseIntervalSeconds }}s</span>
+                  </div>
                 </div>
                 <div v-if="retrievalDiagnostics" class="agent-meta-block diagnostics-block">
                   <span class="meta-label">检索诊断</span>
@@ -1026,6 +1036,7 @@ const {
   renderedMarkdown,
   conflictNotices,
   retrievalDiagnostics,
+  frameDiagnostics,
   evidenceAuditSummary,
   evaluationSignals,
   transcribe,

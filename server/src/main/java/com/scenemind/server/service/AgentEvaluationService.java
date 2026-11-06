@@ -1,5 +1,6 @@
 package com.scenemind.server.service;
 
+import com.scenemind.core.eval.CitationMetrics;
 import com.scenemind.core.ranking.RankingConfig;
 import com.scenemind.core.ranking.TextSimilarity;
 import com.scenemind.server.dto.AgentFeedback;
@@ -55,10 +56,16 @@ public class AgentEvaluationService {
     public Map<String, Object> evaluate(VideoContext context, AgentState state) {
         AnalysisResult result = state == null ? null : state.result();
         Map<String, Object> metrics = new LinkedHashMap<>();
+        double citationPrecision = evidenceSupportRate(context, result);
+        double citationRecall = claimEvidenceSupportRate(context, result);
         metrics.put("structuredValid", structuredValid(result));
         metrics.put("timestampCoverageRate", timestampCoverageRate(context, result));
-        metrics.put("evidenceSupportRate", evidenceSupportRate(context, result));
-        metrics.put("claimEvidenceSupportRate", claimEvidenceSupportRate(context, result));
+        metrics.put("evidenceSupportRate", citationPrecision);
+        metrics.put("claimEvidenceSupportRate", citationRecall);
+        // 与 Video RAG 评测的 citation attribution 对齐：P=引用可核验率，R=结论有出处率。
+        metrics.put("citationPrecision", citationPrecision);
+        metrics.put("citationRecall", citationRecall);
+        metrics.put("citationF1", CitationMetrics.f1(citationPrecision, citationRecall));
         metrics.put("criticPassed", state != null && state.critique() != null && state.critique().passed());
         // SceneMind 新增：证据质量不再只看「有没有时间戳」，还看「是不是一堆重复片段」
         // 以及「结论是否覆盖了视频的不同时段」。

@@ -37,9 +37,9 @@ test('demo initialize returns a legal JSON-RPC response (acceptance smoke)', asy
   assert.equal(resp.result.serverInfo.name, 'scenemind-mcp');
 });
 
-test('demo tools/list exposes 7 tools', async () => {
+test('demo tools/list exposes 10 tools', async () => {
   const resp = await rpc.request('tools/list', {});
-  assert.equal(resp.result.tools.length, 7);
+  assert.equal(resp.result.tools.length, 10);
 });
 
 test('demo submit_video returns a mediaId without any network', async () => {
@@ -103,6 +103,15 @@ test('demo search_evidence returns timestamped hits', async () => {
   assert.ok(payload.count >= 1);
   assert.equal(payload.hits[0].source, 'ASR+OCR');
   assert.ok(payload.hits[0].timestampLabel.includes(':'));
+});
+
+test('demo get_timeline returns 5-minute chapter entries', async () => {
+  const { resp, payload } = await tool('scenemind_get_timeline', { mediaId: 1001 });
+  assert.equal(resp.result.isError, undefined);
+  assert.ok(payload.count >= 2);
+  assert.equal(payload.entries[0].startMs, 0);
+  assert.match(payload.entries[0].timestampLabel, /^\d{2}:\d{2}-\d{2}:\d{2}$/);
+  assert.ok(payload.entries[0].summary.length > 0);
 });
 
 test('demo ask_followup returns an answer mentioning the conflict', async () => {

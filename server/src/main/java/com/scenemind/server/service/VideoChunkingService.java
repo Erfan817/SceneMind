@@ -70,7 +70,8 @@ public class VideoChunkingService {
             telemetry.incrementCurrent("summaryFallbacks", 1);
             String rawText = segments.stream()
                     .map(segment -> segment.transcript() + " "
-                            + String.join(" ", normalizeTexts(segment.ocrTexts())))
+                            + String.join(" ", normalizeTexts(segment.ocrTexts())) + " "
+                            + String.join(" ", normalizeTexts(segment.visualCaptions())))
                     .filter(text -> !text.isBlank())
                     .collect(java.util.stream.Collectors.joining(" "));
             String summary = rawText.length() <= 500 ? rawText : rawText.substring(0, 500);

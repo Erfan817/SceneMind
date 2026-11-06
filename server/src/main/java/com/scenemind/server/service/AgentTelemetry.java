@@ -112,7 +112,16 @@ public class AgentTelemetry {
      * 与前端调试面板直接消费；冲突信号单独放在 trace.conflicts。
      */
     public void sectionCurrent(String section, Object value) {
-        TraceData trace = current();
+        section(currentTrace.get(), section, value);
+    }
+
+    /**
+     * 按 traceId 写结构化诊断。用于异步分支线程：ThreadLocal 不会跨线程传递，
+     * 只靠 {@link #sectionCurrent(String, Object)} 会丢失 VideoContext 这类子任务的诊断。
+     */
+    public void section(String traceId, String section, Object value) {
+        if (traceId == null || section == null || value == null) return;
+        TraceData trace = traces.get(traceId);
         if (trace != null) trace.diagnostics.put(section, value);
     }
 

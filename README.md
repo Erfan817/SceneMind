@@ -78,7 +78,7 @@
 - **与线上同链路**：评测走 `fuse() → TopKPolicy.decide() → select()`，与 `VideoEvidenceRetrievalService` 一致；参数从与 Spring 同名的 `SCENEMIND_*` 环境变量读取（`SCENEMIND_RRF_K`、`SCENEMIND_MAX_RESULTS`、三个通道权重等），改配置会同时改变线上排序与离线报告；
 - **报告可审计**：`docs/benchmark-report.md` 新增「生效策略配置」小节，列出本次实际生效的参数。CI 校验提交的报告与 CI 生成结果字节一致，所以改配置却不更新报告同样会卡住 PR。
 
-自检断言从 8 条增加到 **11 条**：原有 8 条覆盖相对基线不退化、RRF 稳定性、证据回归、冲突检测与 TopK 决策，新增的 3 条是绝对阈值——Recall ≥ 0.75、时间覆盖率 ≥ 0.75、冗余率 ≤ 0.20，避免「相对基线没退步、但绝对值已经很差」悄悄通过。
+自检断言从 8 条增加到 **12 条**：原有 8 条覆盖相对基线不退化、RRF 稳定性、证据回归、冲突检测与 TopK 决策，新增 3 条绝对阈值——Recall ≥ 0.75、时间覆盖率 ≥ 0.75、冗余率 ≤ 0.20，以及 1 条引用质量下限——CiteF1 ≥ 0.75，避免「相对基线没退步、但绝对值和引用质量已经很差」悄悄通过。
 
 ### 4. 工程化收口
 
@@ -93,6 +93,30 @@
 新增 `mcp/`：零外部依赖的 MCP Server（只用 Node.js 内置模块，stdio JSON-RPC 2.0，不需要 `npm install`）。外部 Agent 把视频链接与分析目标交给它，它调用 SceneMind 后端，把带**时间戳 / 来源 / 原文**的结构化证据返回给对方 Agent，而不是一段无法核验的摘要。
 
 协议取舍、工具清单与错误语义见 `docs/MCP_SERVER.md`，接入方式见 `mcp/README.md`。支持 **stdio** 与 **Streamable HTTP**（`POST /mcp` + Bearer token）两种传输：桌面 Agent 可用 stdio，跨机器/多 Agent 可用 HTTP；远程部署仍需前置 TLS 与访问控制。
+
+### 6. 课程/PPT 抽帧：单一场景检测之外的 dense 路径
+
+原来的抽帧只走 FFmpeg `select=gt(scene,0.35)`，对 PPT 一行行出现、板书渐进书写这类「整屏变化很小」的内容容易漏帧。新增 `core.frame` 纯函数层：
+
+- `FrameChangeDetector` 用 64×64 灰度签名的 MAE + 变化像素比例双指标，避免人物微表情、口型变化被当成关键帧；
+- `DenseFrameSelector` 按固定间隔采样，并与「上一张保留帧」比较，让缓慢累积的幻灯片变化最终被选中；超过上限时按变化比例/MAE 择优，再按时间排序；
+- `FrameModeResolver` 在 `auto` 模式下根据学习模式与标题/目标中的课程、PPT、lecture 等线索选择 dense，其余走 scene；
+- `VideoContextService` 只负责 FFmpeg 采样与 OCR 适配，参数收敛到 `scenemind.frame.*`；抽帧诊断写入 trace 的 `diagnostics.frames`，前端「分析详情」可见。
+
+新增 12 个纯函数测试，覆盖双指标、首帧保留、渐进变化累积、上限截取与 auto 选择。
+
+### 7. 检索粒度与视觉语义：从「chunk 级 + OCR」再往前一步
+
+原来的语义通道按 5 分钟 chunk 算分，同一个 chunk 内的 60s 片段共享一个语义名次；视觉通道实际上只覆盖 OCR 关键词。这两点会让「画面里有、但没人说也没字」的内容检索不到，也会让段级排序过度依赖词法。
+
+- **segment 级向量**：`VideoEvidenceRetrievalService.indexSegments()` 把 60s 片段单独嵌入并写入 Qdrant，payload 用 `granularity=segment` 与 chunk 点区分；检索时先做 chunk 粗排，再用 segment 向量精排，Qdrant 不可用时回退到原 chunk 分数；
+- **视觉语义通道**：`VisualCaptionService` 对关键帧调用 OpenAI 兼容的视觉接口，生成一句客观画面描述，写入 `VideoSegment.visualCaptions`；视觉通道同时看 OCR 与描述，但**描述只参与召回，不进入 `EvidenceAuditor` 的可引用来源**（仍只有 ASR / OCR / ASR+OCR）；
+- **成本保护**：`scenemind.vision.enabled` 默认关闭；开启后用 `scenemind.vision.max-frames`（默认 12）按预算均匀抽样，避免逐帧串行调用拖长 OCR 分支；抽帧与 caption 的命中/跳过都写入 trace。
+
+### 8. 引用质量与 Agent 证据查看
+
+- 新增 `core.eval.CitationMetrics`：CiteP = 被引用证据通过逐字核验的比例，CiteR = 结论中至少有一条有效引用的比例，CiteF1 为二者调和平均；离线自检与在线 `AgentEvaluationService` 都会输出这三个指标。
+- MCP Server 从 7 个工具扩到 **10 个**：新增 `scenemind_peek_frame`（某时刻关键帧 URL + OCR/转写）、`scenemind_get_transcript`（按时间范围切转写）、`scenemind_get_timeline`（5 分钟章节摘要/关键词/证据密度），让外部 Agent 能先导航、再精读、最后看画面核验。
 
 ---
 
@@ -111,7 +135,7 @@
 > 量纲稳定性 = 把语义分数做 `37x + 5` 的单调变换（模拟向量服务打分尺度变化）后 TopK 集合的 Jaccard。RRF 只用名次，恒为 1.000；线性加权会因权重失衡漂移一半结果。
 > Recall 与覆盖率在这份数据集上持平——相关片段信号较强，改造解决的是**冗余与鲁棒性**，不是召回上限。要验证召回收益需要真实标注集，这是路线图里的下一步。
 
-测试：`server` 26 个测试类、82 个 `@Test` 用例，`bash ./mvnw test` 实测 0 失败；其中 `core` 纯函数层 5 个测试类 31 个用例，本轮新增 6 个测试类（`EvidenceRetryPolicyTest`、`EvidenceAuditIntegrationTest`、`AgentTelemetryTest`、`RealAnnotationEvaluationTest`、`AuthServiceTest`、`MinioUtilsTest`；真实标注集用例在未放数据时自动跳过）。`client` 的既有前端用例保持通过（`cd client && npm test`）；`extension` 的用例需先 `npm ci`；`mcp/` 的用例用 `node --test` 跑，不依赖后端。
+测试：`server` 34 个测试类、111 个 `@Test` 用例、0 失败（1 个真实标注集用例在未放数据时自动跳过）；其中 `core` 纯函数层 9 个测试类 46 个用例，覆盖 RRF、证据校验、抽帧与引用指标。`client` 的既有前端用例保持通过（`cd client && npm test`）；`extension` 的用例需先 `npm ci`；`mcp/` 的 57 个用例用 `node --test` 跑，不依赖后端。
 
 ---
 
@@ -126,7 +150,8 @@ flowchart LR
     W -->|分片上传 + SSE| A
     A -->|202 Accepted| M[(RocketMQ)]
     M --> C[分析 Worker]
-    C --> X[VideoContext<br/>ASR + OCR + 关键帧 + 时间戳]
+    C --> F[core.frame<br/>dense / scene 抽帧]
+    F --> X[VideoContext<br/>ASR + OCR + 关键帧 + 时间戳]
     X --> R[core.ranking<br/>RRF 融合 / 覆盖 / 去冗余 / 通道隔离]
     R --> L[AgentLoop<br/>Planner → Executor → Critic]
     L --> V[core.evidence<br/>通道隔离校验 / 冲突检测]
@@ -139,7 +164,7 @@ flowchart LR
     E -.回归门禁.-> V
 ```
 
-`core` 三个包不依赖 Spring、数据库或网络，可单独编译运行；`server` 只做 DTO 适配、外部依赖降级与埋点。
+`core` 四个包不依赖 Spring、数据库或网络，可单独编译运行；`server` 只做 DTO 适配、外部依赖降级与埋点。
 
 ---
 
@@ -257,6 +282,7 @@ SceneMind
 │   ├── core/                  # 纯函数内核（零框架依赖）
 │   │   ├── ranking/           # RRF 融合、通道隔离、时间窗覆盖、去冗余、自适应 TopK、基线
 │   │   ├── evidence/          # 结构化证据校验、拒绝原因、音画冲突检测
+│   │   ├── frame/             # dense/scene 抽帧、MAE + 变化像素比例、auto 模式选择
 │   │   └── eval/              # 确定性离线评测、指标、自检入口
 │   └── server/                # Spring Boot：DTO 适配、编排、降级、埋点
 │       └── service/           # AgentLoop、EvidenceRetryPolicy（重试分流纯函数）、检索适配

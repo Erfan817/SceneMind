@@ -27,6 +27,12 @@ Vue 3 工作台、浏览器扩展）基于一个 MIT 许可的开源长视频分
 - `server/src/test/` 下新增的测试（`core` 纯函数层、证据重试策略、证据核验聚合等），
   以及对应的 CI 门禁配置。
 
+## 参考实现
+
+- 课程/PPT dense 抽帧的 64×64 灰度 MAE + 变化像素比例阈值、首帧保留与超限择优策略，
+  参考 [bilibili-video-summary](https://github.com/Erfan817/bilibili-video-summary)（MIT）；
+  Java 实现与 SceneMind 的纯函数分层、配置化与诊断接入由本项目完成。
+
 ## 第三方组件
 
 运行时依赖的第三方组件（Spring Boot、Vue、RocketMQ、Qdrant、MinIO、FFmpeg、Tesseract、

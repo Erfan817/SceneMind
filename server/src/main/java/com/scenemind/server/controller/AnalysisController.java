@@ -9,6 +9,9 @@ import com.scenemind.server.dto.RouteDecision;
 import com.scenemind.server.dto.RouteRequest;
 import com.scenemind.server.dto.TaskStatus;
 import com.scenemind.server.dto.TaskEvent;
+import com.scenemind.server.dto.FrameView;
+import com.scenemind.server.dto.TimelineView;
+import com.scenemind.server.dto.TranscriptView;
 import com.scenemind.server.dto.VideoEvidenceHit;
 import com.scenemind.server.entity.MediaFile;
 import com.scenemind.server.exception.BusinessException;
@@ -19,6 +22,7 @@ import com.scenemind.server.service.AgentEvaluationService;
 import com.scenemind.server.service.AgentTelemetry;
 import com.scenemind.server.service.AiService;
 import com.scenemind.server.service.AuthService;
+import com.scenemind.server.service.EvidenceViewService;
 import com.scenemind.server.service.MediaService;
 import com.scenemind.server.service.TaskEventService;
 import com.scenemind.server.service.VideoContextNotReadyException;
@@ -59,6 +63,7 @@ public class AnalysisController {
     private final TaskEventService taskEventService;
     private final AnalysisStatusService statusService;
     private final ModeRouter modeRouter;
+    private final EvidenceViewService evidenceViewService;
     private final Executor aiTaskExecutor;
 
     public AnalysisController(AiService aiService,
@@ -70,6 +75,7 @@ public class AnalysisController {
                               TaskEventService taskEventService,
                               AnalysisStatusService statusService,
                               ModeRouter modeRouter,
+                              EvidenceViewService evidenceViewService,
                               @Qualifier("aiTaskExecutor") Executor aiTaskExecutor) {
         this.aiService = aiService;
         this.dispatchService = dispatchService;
@@ -80,6 +86,7 @@ public class AnalysisController {
         this.taskEventService = taskEventService;
         this.statusService = statusService;
         this.modeRouter = modeRouter;
+        this.evidenceViewService = evidenceViewService;
         this.aiTaskExecutor = aiTaskExecutor;
     }
 
@@ -143,6 +150,42 @@ public class AnalysisController {
         dispatchService.requireAiQuota(userId);
         String normalizedQuery = normalizeText(query, "检索问题");
         return runInteractive(() -> aiService.searchEvidence(id, normalizedQuery));
+    }
+
+    /** 视频时间轴：按 5 分钟章节返回摘要、关键词、证据密度与代表关键帧。 */
+    @GetMapping("/timeline")
+    public Result<TimelineView> timeline(
+            @RequestParam Long id,
+            @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+        mediaService.requireOwnedMedia(id, userId);
+        requireVideoContext(id);
+        return Result.ok(evidenceViewService.timeline(id));
+    }
+
+    /**
+     * 某时刻的画面证据视图：返回最近关键帧的 URL 与该时间点的 OCR/转写。
+     * 外部 Agent 可以据此"亲眼"核验模型结论，而不只是读文本证据。
+     */
+    @GetMapping("/frame")
+    public Result<FrameView> frame(
+            @RequestParam Long id,
+            @RequestParam long timestampMs,
+            @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+        mediaService.requireOwnedMedia(id, userId);
+        requireVideoContext(id);
+        return Result.ok(evidenceViewService.frameAt(id, timestampMs));
+    }
+
+    /** 按时间范围切出转写片段（含 OCR），供 Agent 精确读取某几秒。 */
+    @GetMapping("/transcript")
+    public Result<List<TranscriptView>> transcript(
+            @RequestParam Long id,
+            @RequestParam long startMs,
+            @RequestParam long endMs,
+            @RequestAttribute(AuthService.REQUEST_USER_ID) Long userId) {
+        mediaService.requireOwnedMedia(id, userId);
+        requireVideoContext(id);
+        return Result.ok(evidenceViewService.transcriptRange(id, startMs, endMs));
     }
 
     @PostMapping("/agent-feedback")

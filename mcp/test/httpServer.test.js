@@ -48,7 +48,7 @@ test('HTTP transport answers tools/list with the same handlers as stdio', async 
     const payload = await response.json();
     assert.equal(payload.jsonrpc, '2.0');
     assert.equal(payload.id, 1);
-    assert.equal(payload.result.tools.length, 7);
+    assert.equal(payload.result.tools.length, 10);
   } finally {
     server.close();
   }

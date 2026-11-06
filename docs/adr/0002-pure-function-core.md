@@ -45,7 +45,7 @@
 **正面**
 
 - 新增 12 个测试类，后端 26 个测试类 / 82 个用例全绿；原有 14 个测试类零修改通过。
-- 评测从「需要 API Key 的手工脚本」变成「一个 JDK 就能跑、11 条断言、CI 门禁」；评测参数读与线上同名的 `SCENEMIND_*` 环境变量，报告会列出「生效策略配置」。
+- 评测从「需要 API Key 的手工脚本」变成「一个 JDK 就能跑、12 条断言、CI 门禁」；评测参数读与线上同名的 `SCENEMIND_*` 环境变量，报告会列出「生效策略配置」。
 - 策略可解释、可回放、可 A/B，调参不改代码。
 
 **负面 / 已知取舍**
@@ -58,6 +58,6 @@
 ## 验证
 
 - `javac --release 21 -d out $(find core -name '*.java')` 退出码 0。
-- `bash scripts/run-benchmark.sh` 11 条自检断言全部通过。
+- `bash scripts/run-benchmark.sh` 12 条自检断言全部通过。
 - `cd server && bash ./mvnw test`：26 个测试类 / 82 个用例 / 0 失败。
 - `.github/workflows/ci.yml` 的 `core-evaluation` job 作为长期门禁。

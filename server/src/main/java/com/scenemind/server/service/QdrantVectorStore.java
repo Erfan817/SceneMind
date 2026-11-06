@@ -62,6 +62,7 @@ public class QdrantVectorStore {
                 payload.put("mediaId", mediaId);
                 payload.put("startMs", chunk.startTime());
                 payload.put("endMs", chunk.endTime());
+                payload.put("granularity", "chunk");
 
                 JSONObject point = new JSONObject();
                 point.put("id", pointId(mediaId, chunk));
@@ -84,13 +85,11 @@ public class QdrantVectorStore {
         if (!enabled || queryEmbedding.isEmpty()) return List.of();
         try {
             ensureCollection(queryEmbedding.size());
-            JSONObject match = new JSONObject();
-            match.put("value", mediaId);
-            JSONObject condition = new JSONObject();
-            condition.put("key", "mediaId");
-            condition.put("match", match);
             JSONObject filter = new JSONObject();
-            filter.put("must", List.of(condition));
+            filter.put("must", List.of(matchCondition("mediaId", mediaId)));
+            // 分段点没有 granularity 字段（历史数据）或为 chunk；用 must_not 排除 segment，
+            // 这样旧 collection 不需要重建也能继续按 chunk 召回。
+            filter.put("must_not", List.of(matchCondition("granularity", "segment")));
 
             JSONObject body = new JSONObject();
             body.put("query", queryEmbedding);
@@ -118,6 +117,82 @@ public class QdrantVectorStore {
         } catch (RuntimeException e) {
             collectionReady.set(false);
             throw new IllegalStateException("Qdrant 语义检索失败", e);
+        }
+    }
+
+    /**
+     * 写入分段级向量。与 chunk 向量共用同一个 collection，用 payload 的
+     * {@code granularity=segment} 区分；这样粗排 chunk、精排 segment 可以走同一套索引。
+     */
+    public void upsertSegments(Long mediaId, List<SegmentVector> segments) {
+        if (!enabled || mediaId == null || segments == null || segments.isEmpty()) return;
+        List<SegmentVector> vectorized = segments.stream()
+                .filter(segment -> segment != null && !segment.embedding().isEmpty())
+                .toList();
+        if (vectorized.isEmpty()) return;
+        try {
+            ensureCollection(vectorized.get(0).embedding().size());
+            JSONArray points = new JSONArray();
+            for (SegmentVector segment : vectorized) {
+                JSONObject payload = new JSONObject();
+                payload.put("mediaId", mediaId);
+                payload.put("startMs", segment.startMs());
+                payload.put("endMs", segment.endMs());
+                payload.put("granularity", "segment");
+
+                JSONObject point = new JSONObject();
+                point.put("id", segmentPointId(mediaId, segment));
+                point.put("vector", segment.embedding());
+                point.put("payload", payload);
+                points.add(point);
+            }
+            JSONObject body = new JSONObject();
+            body.put("points", points);
+            execute(new Request.Builder()
+                    .url(baseUrl + "/collections/" + collection + "/points?wait=true")
+                    .put(RequestBody.create(body.toString(), JSON_MEDIA_TYPE)));
+        } catch (RuntimeException e) {
+            collectionReady.set(false);
+            throw new IllegalStateException("Qdrant 分段向量写入失败", e);
+        }
+    }
+
+    /** 只召回 segment 粒度，避免 chunk 点稀释分段语义。 */
+    public List<SegmentHit> searchSegments(Long mediaId, List<Double> queryEmbedding, int limit) {
+        if (!enabled || mediaId == null || queryEmbedding == null || queryEmbedding.isEmpty()) return List.of();
+        try {
+            ensureCollection(queryEmbedding.size());
+            JSONObject filter = new JSONObject();
+            filter.put("must", List.of(
+                    matchCondition("mediaId", mediaId),
+                    matchCondition("granularity", "segment")));
+
+            JSONObject body = new JSONObject();
+            body.put("query", queryEmbedding);
+            body.put("filter", filter);
+            body.put("limit", limit);
+            body.put("with_payload", true);
+            String response = execute(new Request.Builder()
+                    .url(baseUrl + "/collections/" + collection + "/points/query")
+                    .post(RequestBody.create(body.toString(), JSON_MEDIA_TYPE)));
+
+            JSONObject result = JSON.parseObject(response).getJSONObject("result");
+            JSONArray points = result == null ? null : result.getJSONArray("points");
+            if (points == null) return List.of();
+            List<SegmentHit> hits = new ArrayList<>(points.size());
+            for (int i = 0; i < points.size(); i++) {
+                JSONObject point = points.getJSONObject(i);
+                JSONObject payload = point.getJSONObject("payload");
+                if (payload == null) continue;
+                hits.add(new SegmentHit(
+                        payload.getLongValue("startMs"),
+                        payload.getLongValue("endMs"),
+                        point.getDoubleValue("score")));
+            }
+            return hits;
+        } catch (RuntimeException e) {
+            collectionReady.set(false);
+            throw new IllegalStateException("Qdrant 分段语义检索失败", e);
         }
     }
 
@@ -190,11 +265,35 @@ public class QdrantVectorStore {
         return request;
     }
 
+    private JSONObject matchCondition(String key, Object value) {
+        JSONObject match = new JSONObject();
+        match.put("value", value);
+        JSONObject condition = new JSONObject();
+        condition.put("key", key);
+        condition.put("match", match);
+        return condition;
+    }
+
     private String pointId(Long mediaId, VideoChunk chunk) {
         String source = mediaId + ":" + chunk.startTime() + ":" + chunk.endTime();
         return UUID.nameUUIDFromBytes(source.getBytes(StandardCharsets.UTF_8)).toString();
     }
 
+    private String segmentPointId(Long mediaId, SegmentVector segment) {
+        String source = mediaId + ":segment:" + segment.startMs() + ":" + segment.endMs();
+        return UUID.nameUUIDFromBytes(source.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
     public record VectorHit(long startMs, long endMs, double score) {
+    }
+
+    public record SegmentVector(long startMs, long endMs, List<Double> embedding) {
+        public SegmentVector {
+            if (startMs < 0 || endMs <= startMs) throw new IllegalArgumentException("invalid segment range");
+            embedding = embedding == null ? List.of() : List.copyOf(embedding);
+        }
+    }
+
+    public record SegmentHit(long startMs, long endMs, double score) {
     }
 }
