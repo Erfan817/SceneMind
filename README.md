@@ -116,6 +116,7 @@
 ### 8. 引用质量与 Agent 证据查看
 
 - 新增 `core.eval.CitationMetrics`：CiteP = 被引用证据通过逐字核验的比例，CiteR = 结论中至少有一条有效引用的比例，CiteF1 为二者调和平均；离线自检与在线 `AgentEvaluationService` 都会输出这三个指标。
+- `AnalysisResult` 新增可选的 `claims[] {id, text, evidenceIds[]}` 与 `evidence[].id`：模型能给出结构化绑定时按 evidenceIds 计算引用指标并在 markdown 结论后内联 `[mm:ss]`；旧格式没有 claims 时回退到 `conclusions + evidence.claim`，不破坏历史结果。
 - MCP Server 从 7 个工具扩到 **10 个**：新增 `scenemind_peek_frame`（某时刻关键帧 URL + OCR/转写）、`scenemind_get_transcript`（按时间范围切转写）、`scenemind_get_timeline`（5 分钟章节摘要/关键词/证据密度），让外部 Agent 能先导航、再精读、最后看画面核验。
 
 ---
@@ -135,7 +136,7 @@
 > 量纲稳定性 = 把语义分数做 `37x + 5` 的单调变换（模拟向量服务打分尺度变化）后 TopK 集合的 Jaccard。RRF 只用名次，恒为 1.000；线性加权会因权重失衡漂移一半结果。
 > Recall 与覆盖率在这份数据集上持平——相关片段信号较强，改造解决的是**冗余与鲁棒性**，不是召回上限。要验证召回收益需要真实标注集，这是路线图里的下一步。
 
-测试：`server` 34 个测试类、111 个 `@Test` 用例、0 失败（1 个真实标注集用例在未放数据时自动跳过）；其中 `core` 纯函数层 9 个测试类 46 个用例，覆盖 RRF、证据校验、抽帧与引用指标。`client` 的既有前端用例保持通过（`cd client && npm test`）；`extension` 的用例需先 `npm ci`；`mcp/` 的 57 个用例用 `node --test` 跑，不依赖后端。
+测试：`server` 34 个测试类、112 个 `@Test` 用例、0 失败（1 个真实标注集用例在未放数据时自动跳过）；其中 `core` 纯函数层 9 个测试类 46 个用例，覆盖 RRF、证据校验、抽帧与引用指标。`client` 的既有前端用例保持通过（`cd client && npm test`）；`extension` 的用例需先 `npm ci`；`mcp/` 的 57 个用例用 `node --test` 跑，不依赖后端。
 
 ---
 

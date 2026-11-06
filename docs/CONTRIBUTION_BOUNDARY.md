@@ -46,10 +46,10 @@
 | 20 | 评测同链路 | 评测自行拼装 `rank()`，参数与线上脱节，改配置不影响报告 | 评测走 `fuse → TopKPolicy.decide → select`，读与线上同名的 `SCENEMIND_*` 环境变量；报告新增「生效策略配置」小节 | 重构 | `OfflineEvaluatorTest`；CI 报告 diff 门禁 |
 | 21 | 自检断言 | 8 条，只覆盖相对基线不退化 | 12 条：新增 3 条绝对阈值（Recall ≥ 0.75、时间覆盖率 ≥ 0.75、冗余率 ≤ 0.20）和 1 条引用质量下限（CiteF1 ≥ 0.75） | 新增 | `bash scripts/run-benchmark.sh` 输出 |
 | 22 | MCP Server | 无，外部 Agent 只能自己调后端接口 | `mcp/`：零外部依赖、stdio JSON-RPC 2.0，把长视频交给 SceneMind 分析，并把带时间戳的证据结果返回给调用方 Agent | 新增 | `mcp/` 的 `node --test` 用例；`mcp/README.md` |
-| 23 | 课程/PPT 抽帧 | 只走 FFmpeg `select=gt(scene,0.35)` + 30 秒保底，PPT 逐行出现时容易漏帧 | 新增 `core.frame`：dense 固定间隔采样 + 64×64 灰度 MAE/变化像素比例双指标；`FrameModeResolver` 按学习模式与标题/目标自动选 scene/dense；参数外部化到 `scenemind.frame.*`，诊断写入 `diagnostics.frames` | 新增 | `FrameChangeDetectorTest`、`DenseFrameSelectorTest`、`FrameModeResolverTest` 共 12 个用例；全量 111 个后端用例通过 |
+| 23 | 课程/PPT 抽帧 | 只走 FFmpeg `select=gt(scene,0.35)` + 30 秒保底，PPT 逐行出现时容易漏帧 | 新增 `core.frame`：dense 固定间隔采样 + 64×64 灰度 MAE/变化像素比例双指标；`FrameModeResolver` 按学习模式与标题/目标自动选 scene/dense；参数外部化到 `scenemind.frame.*`，诊断写入 `diagnostics.frames` | 新增 | `FrameChangeDetectorTest`、`DenseFrameSelectorTest`、`FrameModeResolverTest` 共 12 个用例；全量 112 个后端用例通过 |
 | 24 | 语义通道分辨率 | `semanticScore` 按 5 分钟 chunk 计算，同一 chunk 内 60s 片段共享一个语义名次，段级排序主要靠词法/视觉 | 新增 segment 级向量索引：`indexSegments()` 把 60s 片段单独嵌入写入 Qdrant，`granularity=segment` 与 chunk 点区分；检索时 chunk 粗排 + segment 精排，Qdrant 不可用回退 chunk 分 | 新增 | `VideoEvidenceRetrievalServiceSegmentSemanticTest` 2 个用例；`diagnostics.retrieval.semanticResolution` |
 | 25 | 视觉语义通道 | 视觉通道只是 OCR 关键词命中率，PPT 图表、演示动作、产品外观等无字画面检索不到 | `VisualCaptionService` 对关键帧生成 VLM 短描述，写入 `VideoSegment.visualCaptions`；视觉通道同时看 OCR 与描述；**描述只参与召回，不进入 EvidenceAuditor 可引用来源**；`scenemind.vision.enabled` 默认关闭，`max-frames` 做预算裁剪 | 新增 | `VisualCaptionServiceTest` 4 个用例；`VideoEvidenceRetrievalServiceCaptionTest` |
-| 26 | 引用质量与证据查看 | 只有召回/覆盖率，无法量化「每条结论是否都有可核验出处」；外部 Agent 也看不到画面 | 新增 `core.eval.CitationMetrics`（CiteP/CiteR/CiteF1）；在线 `AgentEvaluationService` 同步输出；MCP 新增 `scenemind_peek_frame` / `get_transcript` / `get_timeline`，工具数 7 → 10 | 新增 | `CitationMetricsTest` 3 个用例；MCP 57 个用例 |
+| 26 | 引用质量与证据查看 | 只有召回/覆盖率，无法量化「每条结论是否都有可核验出处」；外部 Agent 也看不到画面 | 新增 `core.eval.CitationMetrics`（CiteP/CiteR/CiteF1）；`AnalysisResult` 增加可选 `claims[] {id,text,evidenceIds[]}` 与 `evidence[].id`，在线 `AgentEvaluationService` 优先按结构化绑定计算、旧结果回退文本绑定；MCP 新增 `scenemind_peek_frame` / `get_transcript` / `get_timeline`，工具数 7 → 10 | 新增 | `CitationMetricsTest` 3 个用例、`EvidenceVerificationServiceTest` 结构化 claim 用例；MCP 57 个用例 |
 
 ## 3. 新增文件清单
 
@@ -86,7 +86,7 @@ server/.../service/EvidenceViewService.java                                  （
 server/.../dto/FrameView.java / TranscriptView.java / TimelineView.java      （新增：证据查看 DTO）
 ```
 
-**测试（新增 18 个测试类；`server` 现有 34 个测试类 / 111 个用例，1 个真实标注集用例默认跳过）**
+**测试（新增 18 个测试类；`server` 现有 34 个测试类 / 112 个用例，1 个真实标注集用例默认跳过）**
 
 ```
 core 纯函数层（9 个文件 / 46 个用例）
@@ -141,7 +141,7 @@ server/pom.xml                              groupId 规范化
 | 命令 | 结果 |
 | --- | --- |
 | `JAVA_HOME=<JDK21> mvnw.cmd -B test-compile`（server，Windows） | 退出码 0 |
-| `JAVA_HOME=<JDK21> mvnw.cmd -B clean test`（server，Windows） | 34 个测试类、111 个用例、0 失败、1 跳过 |
+| `JAVA_HOME=<JDK21> mvnw.cmd -B clean test`（server，Windows） | 34 个测试类、112 个用例、0 失败、1 跳过 |
 | `bash scripts/run-benchmark.sh` | 12 条自检断言全部通过，报告生成 |
 | `npm test`（client，等价 `node --test src/*.test.js`） | 33 个前端用例全部通过 |
 | `node --test test/*.test.js`（mcp） | 57 个用例全部通过，无需后端 |

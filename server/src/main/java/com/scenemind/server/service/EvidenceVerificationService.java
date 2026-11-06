@@ -2,6 +2,7 @@ package com.scenemind.server.service;
 
 import com.scenemind.core.evidence.AuditResult;
 import com.scenemind.core.evidence.ConflictDetector;
+import com.scenemind.core.eval.CitationMetrics;
 import com.scenemind.core.evidence.EvidenceAuditor;
 import com.scenemind.core.evidence.EvidenceModels.EvidenceClaim;
 import com.scenemind.core.evidence.EvidenceModels.EvidenceCorpus;
@@ -12,7 +13,9 @@ import com.scenemind.server.dto.VideoContext;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 证据校验的 Spring 适配层。
@@ -87,6 +90,31 @@ public class EvidenceVerificationService {
         }
         return new EvidenceAuditReport(findings.size(), accepted, retryable, hallucination,
                 findings, conflicts, notes);
+    }
+
+    /**
+     * 结构化 claim-evidence 的引用质量：只在模型给出 {@code claims[] + evidenceIds[]} 时启用；
+     * 旧结果返回 {@code null}，由调用方回退到 conclusions/evidence.claim 的聚合指标。
+     */
+    public CitationMetrics citationMetrics(VideoContext context, AnalysisResult result) {
+        if (result == null || result.claims() == null || result.claims().isEmpty()) return null;
+        if (result.claims().stream().allMatch(claim -> claim.evidenceIds().isEmpty())) return null;
+        Map<String, AnalysisResult.Evidence> evidenceById = new LinkedHashMap<>();
+        for (AnalysisResult.Evidence evidence : result.evidence()) {
+            if (!evidence.id().isBlank()) evidenceById.putIfAbsent(evidence.id(), evidence);
+        }
+        List<CitationMetrics.Claim> claims = result.claims().stream()
+                .map(claim -> new CitationMetrics.Claim(
+                        claim.id(),
+                        claim.text(),
+                        claim.evidenceIds().stream()
+                                .map(evidenceById::get)
+                                .filter(evidence -> evidence != null)
+                                .map(evidence -> new CitationMetrics.Citation(
+                                        evidence.timestampMs(), evidence.source(), evidence.content()))
+                                .toList()))
+                .toList();
+        return CitationMetrics.evaluate(toCorpus(context), claims);
     }
 
     private static EvidenceCorpus toCorpus(VideoContext context) {

@@ -52,7 +52,7 @@
 4. FFmpeg 切分音频；抽帧按内容类型分流：对谈类走场景检测（30 秒保底采样），课程/PPT 类走 8 秒 dense 采样，再用 64×64 灰度 MAE + 变化像素比例筛选，生成 `VideoContext`。
 5. 每 5 分钟生成摘要 / 关键词 / Embedding；同时为 60s 片段单独生成 segment embedding。检索优先用 chunk 粗排、segment 精排，避免同一 chunk 内所有片段共享一个语义名次。可选开启关键帧 VLM 描述（`scenemind.vision.enabled`），描述只参与视觉通道召回，不进入证据校验。
 6. `HybridRanker` 对语义、词法、视觉（OCR + 可选画面描述）三条通道做 RRF 融合，按时间窗覆盖并抑制近重复，`TopKPolicy` 动态决定预算。
-7. AgentLoop 生成结构化结论、证据与建议；`EvidenceVerificationService.auditResult()` 逐条核验来源、时间戳与原文，并汇总音画冲突；Critic 按拒绝原因分流：可修的证据缺口按时间戳定向补检索，伪造来源 / 跨通道拼接直接判幻觉、只重写不补检索。
+7. AgentLoop 生成结构化结论、证据与建议；模型可输出 `claims[] {id, text, evidenceIds[]}` 与 `evidence[].id` 做结构化绑定，旧格式自动回退到 `conclusions + evidence.claim`。`EvidenceVerificationService.auditResult()` 逐条核验来源、时间戳与原文，并汇总音画冲突；Critic 按拒绝原因分流：可修的证据缺口按时间戳定向补检索，伪造来源 / 跨通道拼接直接判幻觉、只重写不补检索。
 8. 结果与 Checkpoint 落库，SSE 推送阶段与最终结果；`TaskStatus` 带结构化 `conflicts`，结果 markdown 顶部有音画冲突警示条，重新打开面板时同样带；检索、证据与重试诊断写入 trace，供 `/analysis/agent-trace` 与前端调试面板读取。支持基于同一视频继续追问，多轮上下文存 Redis。
 
 ## 5. 功能边界
@@ -73,7 +73,7 @@
 
 | 手段 | 内容 |
 | --- | --- |
-| 单元测试 | `server` 34 个测试类 / 111 个 `@Test` 用例（其中 1 个真实标注集用例在未放数据时跳过；`bash ./mvnw test` 实测 0 失败）；`core` 纯函数层 9 个测试类 46 个用例，覆盖 RRF 不变性、通道隔离、去冗余、时间窗覆盖、拒绝原因、冲突检测、重试分流、抽帧双指标与 dense 选择、引用指标与评测确定性 |
+| 单元测试 | `server` 34 个测试类 / 112 个 `@Test` 用例（其中 1 个真实标注集用例在未放数据时跳过；`bash ./mvnw test` 实测 0 失败）；`core` 纯函数层 9 个测试类 46 个用例，覆盖 RRF 不变性、通道隔离、去冗余、时间窗覆盖、拒绝原因、冲突检测、重试分流、抽帧双指标与 dense 选择、引用指标与评测确定性 |
 | 确定性离线评测 | `bash scripts/run-benchmark.sh`，零外部依赖，12 条内置断言（含 Recall / 时间覆盖率 / 冗余率绝对阈值与 CiteF1 ≥ 0.75），失败非零退出 |
 | CI 门禁 | `core-evaluation` job 重新生成报告并要求与提交版本字节一致；`backend` / `frontend` / `extension` 三路并行测试与构建 |
 | 回归兼容 | 证据校验原有 3 个 public 方法语义不变，原有 4 个回归测试零修改通过 |
@@ -82,7 +82,7 @@
 
 ## 7. 当前状态与验证方式
 
-- 已验证：后端全量清理编译与单测（JDK 21，34 个测试类 111 个用例、0 失败、1 跳过）、`core` 纯 JDK 编译与评测自检（12 条断言）、前端既有用例、MCP 57 个用例、CI 配置语法。
+- 已验证：后端全量清理编译与单测（JDK 21，34 个测试类 112 个用例、0 失败、1 跳过）、`core` 纯 JDK 编译与评测自检（12 条断言）、前端既有用例、MCP 57 个用例、CI 配置语法。
 - 需要环境才能端到端验证：Docker Compose 中间件、FFmpeg / Tesseract、`SILICONFLOW_API_KEY`。`bash scripts/smoke-test.sh` 是这条路径的自动化版本。
 - 已知限制：调试面板展示的是单次分析的诊断快照，还不是可回放的时间轴；抽帧模式目前是全局配置 + 学习模式自动选择，尚未做成请求级参数；VLM 画面描述默认关闭，开启后按 `scenemind.vision.max-frames` 做预算裁剪。
 - 评测数据声明：`docs/benchmark-report.md` 为**合成压力数据集**上的确定性结果，用于策略回归，不代表线上效果。

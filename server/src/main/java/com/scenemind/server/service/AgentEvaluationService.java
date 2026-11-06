@@ -58,6 +58,11 @@ public class AgentEvaluationService {
         Map<String, Object> metrics = new LinkedHashMap<>();
         double citationPrecision = evidenceSupportRate(context, result);
         double citationRecall = claimEvidenceSupportRate(context, result);
+        CitationMetrics structuredCitation = evidenceVerificationService.citationMetrics(context, result);
+        if (structuredCitation != null) {
+            citationPrecision = structuredCitation.precision();
+            citationRecall = structuredCitation.recall();
+        }
         metrics.put("structuredValid", structuredValid(result));
         metrics.put("timestampCoverageRate", timestampCoverageRate(context, result));
         metrics.put("evidenceSupportRate", citationPrecision);
@@ -65,7 +70,10 @@ public class AgentEvaluationService {
         // 与 Video RAG 评测的 citation attribution 对齐：P=引用可核验率，R=结论有出处率。
         metrics.put("citationPrecision", citationPrecision);
         metrics.put("citationRecall", citationRecall);
-        metrics.put("citationF1", CitationMetrics.f1(citationPrecision, citationRecall));
+        metrics.put("citationF1", structuredCitation != null
+                ? structuredCitation.f1()
+                : CitationMetrics.f1(citationPrecision, citationRecall));
+        metrics.put("structuredClaims", structuredCitation != null);
         metrics.put("criticPassed", state != null && state.critique() != null && state.critique().passed());
         // SceneMind 新增：证据质量不再只看「有没有时间戳」，还看「是不是一堆重复片段」
         // 以及「结论是否覆盖了视频的不同时段」。
@@ -108,7 +116,8 @@ public class AgentEvaluationService {
     private boolean structuredValid(AnalysisResult result) {
         return result != null
                 && result.title() != null && !result.title().isBlank()
-                && result.conclusions() != null && !result.conclusions().isEmpty()
+                && ((result.conclusions() != null && !result.conclusions().isEmpty())
+                || (result.claims() != null && !result.claims().isEmpty()))
                 && result.evidence() != null && !result.evidence().isEmpty();
     }
 
@@ -129,12 +138,16 @@ public class AgentEvaluationService {
     }
 
     private double claimEvidenceSupportRate(VideoContext context, AnalysisResult result) {
-        if (context == null || result == null || result.conclusions().isEmpty()) return 0;
-        long supported = result.conclusions().stream()
+        if (context == null || result == null) return 0;
+        List<String> claims = result.conclusions().isEmpty()
+                ? result.claims().stream().map(AnalysisResult.Claim::text).filter(text -> !text.isBlank()).toList()
+                : result.conclusions();
+        if (claims.isEmpty()) return 0;
+        long supported = claims.stream()
                 .filter(claim -> result.evidence().stream().anyMatch(
                         evidence -> evidenceVerificationService.supportsClaim(context, claim, evidence)))
                 .count();
-        return (double) supported / result.conclusions().size();
+        return (double) supported / claims.size();
     }
 
     private double userAcceptanceRate(List<AgentFeedback> feedback) {

@@ -1,12 +1,15 @@
 package com.scenemind.server.service;
 
+import com.scenemind.core.eval.CitationMetrics;
 import com.scenemind.server.dto.AnalysisResult;
 import com.scenemind.server.dto.VideoContext;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EvidenceVerificationServiceTest {
@@ -47,6 +50,27 @@ class EvidenceVerificationServiceTest {
 
         assertTrue(service.supported(context, evidence));
         assertTrue(service.supportsClaim(context, "前序遍历顺序", evidence));
+    }
+
+    @Test
+    void computesStructuredCitationMetricsFromClaimsAndEvidenceIds() {
+        AnalysisResult result = new AnalysisResult(
+                "标题",
+                List.of("前序遍历顺序"),
+                List.of(new AnalysisResult.Evidence(
+                        125_000, "OCR", "根节点、左子树、右子树", "前序遍历顺序", "e1")),
+                List.of(),
+                List.of(),
+                List.of(new AnalysisResult.Claim("c1", "前序遍历顺序", List.of("e1"))));
+
+        CitationMetrics metrics = service.citationMetrics(context, result);
+
+        assertNotNull(metrics);
+        assertEquals(1, metrics.evidenceTotal());
+        assertEquals(1, metrics.evidenceSupported());
+        assertEquals(1, metrics.claimTotal());
+        assertEquals(1, metrics.claimSupported());
+        assertEquals(1.0, metrics.f1(), 1e-9);
     }
 
     @Test

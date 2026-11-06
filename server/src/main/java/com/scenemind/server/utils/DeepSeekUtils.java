@@ -272,6 +272,8 @@ public class DeepSeekUtils {
                     逐项执行 Plan 中的任务，最终产物必须覆盖全部任务。
                     conclusions 中的每条结论都必须至少绑定一条真实证据。
                     evidence.claim 必须原样复制它所支持的 conclusion，timestampMs 必须落在原始片段内，source 只能是 ASR、OCR 或 ASR+OCR。
+                    claims 是结构化绑定：每条 claim 的 evidenceIds 必须引用 evidence 中真实存在的 id；
+                    如果无法可靠给出 claims/evidenceIds，可以省略 claims，服务端会按 evidence.claim 的文本绑定回退。
                     不得使用视频上下文之外的事实。
                     如果存在 Critic 反馈，只修正被指出的问题，并保留已经核验通过的结论和证据。
                     输出保持精炼：同一句原文只在 evidence 中出现一次，禁止重复引用；结论与建议避免复述同一内容。
@@ -280,8 +282,11 @@ public class DeepSeekUtils {
                     {
                       "title": "产物标题",
                       "conclusions": ["结论"],
+                      "claims": [
+                        {"id": "c1", "text": "结论", "evidenceIds": ["e1"]}
+                      ],
                       "evidence": [
-                        {"timestampMs": 120000, "source": "ASR", "content": "原始证据内容", "claim": "结论"}
+                        {"id": "e1", "timestampMs": 120000, "source": "ASR", "content": "原始证据内容", "claim": "结论"}
                       ],
                       "suggestions": ["建议"]
                     }
